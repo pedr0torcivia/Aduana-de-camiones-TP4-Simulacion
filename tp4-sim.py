@@ -159,12 +159,15 @@ def simular(t_sim_min, n_iter_max,
             "PF Estado":      "Libre" if puesto_fis.libre else f"C{puesto_fis.camion_id}",
             "PF Fin":         min2hhmm(puesto_fis.t_fin),
             "Cola Fís":       cola_f,
+            # RNDs que GENERARON este evento (llegada anterior)
+            "RND Lleg Gen":   rnd_lg  if rnd_lg  is not None else "",
+            "RND Lleg Per":   rnd_lp  if rnd_lp  is not None else "",
+            # Estado del sistema resultante
             "En Recinto":     er,
             "Máx Recinto":    max_recinto,
             "Acum Esp Gen":   round(esp_gen_acum, 2),
             "Acum Esp Per":   round(esp_per_acum, 2),
-            "RND Lleg Gen":   rnd_lg  if rnd_lg  is not None else "",
-            "RND Lleg Per":   rnd_lp  if rnd_lp  is not None else "",
+            # RNDs que se usan DURANTE este evento
             "RND Doc":        rnd_doc if rnd_doc is not None else "",
             "RND Deriva Fís": rnd_der if rnd_der is not None else "",
             "RND Dur Fís":    rnd_dur if rnd_dur is not None else "",
