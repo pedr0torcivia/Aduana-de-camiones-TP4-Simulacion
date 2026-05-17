@@ -135,31 +135,42 @@ def simular(t_sim_min, n_iter_max,
         if not puesto_fis.libre: evts.append(("FinFís", puesto_fis.t_fin))
         return "; ".join(f"{n}@{min2hhmm(t)}" for n,t in sorted(evts, key=lambda x:x[1])[:5])
 
+    def cam_label(cid):
+        """Devuelve 'C{id}({tipo},{llegada})' con todos los atributos del camión."""
+        cam = camiones.get(cid)
+        if cam is None:
+            return f"C{cid}"
+        tp = "P" if cam.tipo == "Perecedera" else "G"
+        return f"C{cid}({tp},{min2hhmm(cam.t_llegada)})"
+
     def snap(evento, rnd_lg=None, rnd_lp=None,
              rnd_doc=None, rnd_der=None, rnd_dur=None):
-        # Mostrar en orden de prioridad: perecederas primero (por seq), luego generales (por seq)
+        # Cola doc en orden de prioridad: perecederas primero (por seq), luego generales (por seq)
         pec_vis = [(s,cid,tp) for s,cid,tp in cola_doc if tp == "Perecedera"]
         gen_vis = [(s,cid,tp) for s,cid,tp in cola_doc if tp == "General"]
         cola_d = ", ".join(
-            f"C{cid}({'P' if tp=='Perecedera' else 'G'})"
-            for _,cid,tp in sorted(pec_vis) + sorted(gen_vis)
+            cam_label(cid)
+            for _,cid,_ in sorted(pec_vis) + sorted(gen_vis)
         ) or "-"
-        cola_f = ", ".join(f"C{c}" for c in cola_fis) or "-"
+        # Cola física: mostrar tipo y llegada igual que el resto
+        cola_f = ", ".join(cam_label(c) for c in cola_fis) or "-"
         er = en_recinto()
         return {
             "Iter":           iteracion,
             "Hora":           min2hhmm(reloj),
             "Evento":         evento,
             "Próximos":       proximos_str(),
-            "PD1":            "Libre" if puestos_doc[0].libre else f"C{puestos_doc[0].camion_id}",
+            # Puestos documentales: tipo + hora llegada para todos los atributos del camión
+            "PD1":            "Libre" if puestos_doc[0].libre else cam_label(puestos_doc[0].camion_id),
             "PD1 Fin":        min2hhmm(puestos_doc[0].t_fin),
-            "PD2":            "Libre" if puestos_doc[1].libre else f"C{puestos_doc[1].camion_id}",
+            "PD2":            "Libre" if puestos_doc[1].libre else cam_label(puestos_doc[1].camion_id),
             "PD2 Fin":        min2hhmm(puestos_doc[1].t_fin),
-            "PD3":            "Libre" if puestos_doc[2].libre else f"C{puestos_doc[2].camion_id}",
+            "PD3":            "Libre" if puestos_doc[2].libre else cam_label(puestos_doc[2].camion_id),
             "PD3 Fin":        min2hhmm(puestos_doc[2].t_fin),
             "Cola Doc":       cola_d,
             "Lon CD":         len(cola_doc),
-            "PF Estado":      "Libre" if puesto_fis.libre else f"C{puesto_fis.camion_id}",
+            # Puesto físico: tipo + hora llegada
+            "PF Estado":      "Libre" if puesto_fis.libre else cam_label(puesto_fis.camion_id),
             "PF Fin":         min2hhmm(puesto_fis.t_fin),
             "Cola Fís":       cola_f,
             # RNDs que GENERARON este evento (llegada anterior)
@@ -268,7 +279,9 @@ def simular(t_sim_min, n_iter_max,
     if not puesto_fis.libre and puesto_fis.t_ini is not None:
         t_fis_ocup += reloj - puesto_fis.t_ini
 
-    t_total = max(reloj - HORA_APERTURA, 1)
+    # Denominador = ventana operativa real simulada (hasta el cierre, no hasta el último fin)
+    # Evita sub-estimar utilización cuando camiones terminan después de las 19:00
+    t_ventana = max(min(reloj, HORA_CIERRE) - HORA_APERTURA, 1)
     stats = {
         "Iteraciones totales":         iteracion,
         "Tiempo simulado":             min2hhmm(reloj),
@@ -276,7 +289,7 @@ def simular(t_sim_min, n_iter_max,
         "Camiones Perecedera":         cnt_per,
         "Esp. prom. General (min)":    round(esp_gen_acum / cnt_doc_gen, 2) if cnt_doc_gen else 0,
         "Esp. prom. Perecedera (min)": round(esp_per_acum / cnt_doc_per, 2) if cnt_doc_per else 0,
-        "Utiliz. Física (%)":          round((t_fis_ocup / t_total) * 100, 2),
+        "Utiliz. Física (%)":          round((t_fis_ocup / t_ventana) * 100, 2),
         "Máx. en recinto":             max_recinto,
     }
     return filas, stats
