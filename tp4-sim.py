@@ -137,9 +137,12 @@ def simular(t_sim_min, n_iter_max,
 
     def snap(evento, rnd_lg=None, rnd_lp=None,
              rnd_doc=None, rnd_der=None, rnd_dur=None):
+        # Mostrar en orden de prioridad: perecederas primero (por seq), luego generales (por seq)
+        pec_vis = [(s,cid,tp) for s,cid,tp in cola_doc if tp == "Perecedera"]
+        gen_vis = [(s,cid,tp) for s,cid,tp in cola_doc if tp == "General"]
         cola_d = ", ".join(
             f"C{cid}({'P' if tp=='Perecedera' else 'G'})"
-            for _,cid,tp in sorted(cola_doc)
+            for _,cid,tp in sorted(pec_vis) + sorted(gen_vis)
         ) or "-"
         cola_f = ", ".join(f"C{c}" for c in cola_fis) or "-"
         er = en_recinto()
@@ -190,7 +193,7 @@ def simular(t_sim_min, n_iter_max,
             cierre = True
         # Cortar solo si superamos t_max Y el evento NO es un fin de servicio
         # (para no dejar camiones colgados dentro del recinto al instante X)
-        if t_evt > t_max and tipo_evt in ("llegada_gen", "llegada_per"):
+        if t_evt > t_max and tipo_evt in ("llegada_gen", "llegada_per") and not cierre:
             break
 
         reloj = t_evt
@@ -255,8 +258,11 @@ def simular(t_sim_min, n_iter_max,
             if cola_fis:
                 rnd_dur = ocupar_fis(cola_fis.pop(0), reloj)
 
-        filas.append(snap(tipo_evt.replace("_"," ").title(),
-                          rnd_lg, rnd_lp, rnd_doc, rnd_der, rnd_dur))
+        # Llegadas con cierre=True son rechazadas; etiquetar como cierre
+        nombre_evt = tipo_evt.replace("_", " ").title()
+        if cierre and tipo_evt in ("llegada_gen", "llegada_per"):
+            nombre_evt = "Cierre Aduana"
+        filas.append(snap(nombre_evt, rnd_lg, rnd_lp, rnd_doc, rnd_der, rnd_dur))
 
     # ── Acumular tiempo físico si quedó ocupado al cortar ───
     if not puesto_fis.libre and puesto_fis.t_ini is not None:
