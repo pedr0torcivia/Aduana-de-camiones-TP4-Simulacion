@@ -18,6 +18,7 @@ st.set_page_config(
 @dataclass
 class Camion:
     id: int
+    tipo_id: int
     tipo: str
     h_llegada: float
     estado: str
@@ -34,6 +35,7 @@ class Servidor:
 
 @dataclass
 class Fosa:
+    id: int
     estado: str
     id_camion: Optional[int] = None
     inicio_ocupacion: Optional[float] = None
@@ -52,13 +54,6 @@ def uniforme(minv: float, maxv: float, rnd: float) -> float:
     return minv + rnd * (maxv - minv)
 
 
-def minuto_a_hora(minuto: float) -> str:
-    total = int(round(minuto))
-    h = 7 + total // 60
-    m = total % 60
-    return f"{h:02d}:{m:02d}"
-
-
 def fmt(x):
     if x is None:
         return None
@@ -67,75 +62,18 @@ def fmt(x):
     return x
 
 
+def nombre_grupo_llegada(tipo: dict) -> str:
+    codigo = tipo["codigo"]
+    if codigo == "CCG":
+        return "Llegada de Camión con Carga general"
+    if codigo == "CCP":
+        return "Llegada de Camión con Carga perecedera"
+    return f"Llegada de {tipo['nombre']}"
+
+
 # ---------------------------------------------------------------------------
-# COLUMNAS DEL VECTOR DE ESTADO
+# COLUMNAS DINÁMICAS DEL VECTOR DE ESTADO
 # ---------------------------------------------------------------------------
-
-MULTIINDEX_COLS = [
-    ("Control", "Evento"),
-    ("Control", "Reloj"),
-    ("Control", "Prox Evento"),
-
-    ("Llegada de Camión con Carga general", "RND CCG"),
-    ("Llegada de Camión con Carga general", "Demora en llegar"),
-    ("Llegada de Camión con Carga general", "Proxima Llegada"),
-
-    ("Llegada de Camión con Carga perecedera", "RND CCP"),
-    ("Llegada de Camión con Carga perecedera", "Demora en llegar"),
-    ("Llegada de Camión con Carga perecedera", "Proxima Llegada"),
-
-    ("Colas Control Documental", "Cola CCG"),
-    ("Colas Control Documental", "Cola CCP"),
-
-    ("Puesto de Revision de documentos 1", "Estado"),
-    ("Puesto de Revision de documentos 1", "RND"),
-    ("Puesto de Revision de documentos 1", "Demora Revision Documental"),
-    ("Puesto de Revision de documentos 1", "Fin Revision Documental"),
-
-    ("Puesto de Revision de documentos 2", "Estado"),
-    ("Puesto de Revision de documentos 2", "RND"),
-    ("Puesto de Revision de documentos 2", "Demora Revision Documental"),
-    ("Puesto de Revision de documentos 2", "Fin Revision Documental"),
-
-    ("Puesto de Revision de documentos 3", "Estado"),
-    ("Puesto de Revision de documentos 3", "RND"),
-    ("Puesto de Revision de documentos 3", "Demora Revision Documental"),
-    ("Puesto de Revision de documentos 3", "Fin Revision Documental"),
-
-    ("Revision Fisica", "RND revision"),
-    ("Revision Fisica", "Situacion"),
-    ("Revision Fisica", "Estado"),
-    ("Revision Fisica", "Cola"),
-    ("Revision Fisica", "RND tiempo Revision"),
-    ("Revision Fisica", "Demora Revision"),
-    ("Revision Fisica", "Finaliza Revision"),
-
-    ("Columnas auxiliares", "Hora inicio ocupacion fosa"),
-    ("Columnas auxiliares", "Hora fin ocupacion fosa"),
-    ("Columnas auxiliares", "ACU tiempo ocupacion fosa"),
-    ("Columnas auxiliares", "ACU de espera CCG"),
-    ("Columnas auxiliares", "ACU de espera CCP"),
-    ("Columnas auxiliares", "Cont CCG cola documental"),
-    ("Columnas auxiliares", "cont CCP cola documental"),
-    ("Columnas auxiliares", "Cont Camiones en sistema"),
-    ("Columnas auxiliares", "Max camiones"),
-]
-
-INTERNAL_KEYS = [
-    "ctrl_evento", "ctrl_reloj", "ctrl_prox_evento",
-    "ccg_rnd", "ccg_demora", "ccg_prox",
-    "ccp_rnd", "ccp_demora", "ccp_prox",
-    "cola_ccg", "cola_ccp",
-    "p1_estado", "p1_rnd", "p1_demora", "p1_fin",
-    "p2_estado", "p2_rnd", "p2_demora", "p2_fin",
-    "p3_estado", "p3_rnd", "p3_demora", "p3_fin",
-    "fis_rnd_dec", "fis_situacion", "fos_estado", "fos_cola",
-    "fis_rnd_tiempo", "fis_demora", "fis_fin",
-    "aux_h_ini_fosa", "aux_h_fin_fosa", "aux_acu_fosa",
-    "aux_acu_espera_ccg", "aux_acu_espera_ccp",
-    "aux_cont_ccg", "aux_cont_ccp",
-    "aux_cam_sistema", "aux_max_cam",
-]
 
 CAMION_ATTRS_VECTOR = [
     ("Tipo", "tipo"),
@@ -145,9 +83,78 @@ CAMION_ATTRS_VECTOR = [
 ]
 
 
-def build_multiindex_df(rows_internal: list) -> pd.DataFrame:
-    cols = list(MULTIINDEX_COLS)
-    keys = list(INTERNAL_KEYS)
+def construir_columnas(tipos_clientes: list, puestos_documentales: int, cantidad_fosas: int):
+    cols = []
+    keys = []
+
+    def add(grupo, col, key):
+        cols.append((grupo, col))
+        keys.append(key)
+
+    add("Control", "Evento", "ctrl_evento")
+    add("Control", "Reloj", "ctrl_reloj")
+    add("Control", "Prox Evento", "ctrl_prox_evento")
+
+    for tipo in tipos_clientes:
+        tid = tipo["id"]
+        grupo = nombre_grupo_llegada(tipo)
+        add(grupo, f"RND {tipo['codigo']}", f"lleg_{tid}_rnd")
+        add(grupo, "Demora en llegar", f"lleg_{tid}_demora")
+        add(grupo, "Proxima Llegada", f"lleg_{tid}_prox")
+
+    for tipo in tipos_clientes:
+        add("Colas Control Documental", f"Cola {tipo['codigo']}", f"cola_doc_{tipo['id']}")
+
+    for i in range(1, puestos_documentales + 1):
+        grupo = f"Puesto de Revision de documentos {i}"
+        add(grupo, "Estado", f"p{i}_estado")
+        add(grupo, "RND", f"p{i}_rnd")
+        add(grupo, "Demora Revision Documental", f"p{i}_demora")
+        add(grupo, "Fin Revision Documental", f"p{i}_fin")
+
+    if cantidad_fosas == 1:
+        add("Revision Fisica", "RND revision", "fis_rnd_dec")
+        add("Revision Fisica", "Situacion", "fis_situacion")
+        add("Revision Fisica", "Estado", "fos_1_estado")
+        add("Revision Fisica", "Cola", "fos_cola")
+        add("Revision Fisica", "RND tiempo Revision", "fos_1_rnd_tiempo")
+        add("Revision Fisica", "Demora Revision", "fos_1_demora")
+        add("Revision Fisica", "Finaliza Revision", "fos_1_fin")
+    else:
+        add("Revision Fisica", "RND revision", "fis_rnd_dec")
+        add("Revision Fisica", "Situacion", "fis_situacion")
+        add("Revision Fisica", "Cola", "fos_cola")
+        for i in range(1, cantidad_fosas + 1):
+            grupo = f"Fosa de Revision Fisica {i}"
+            add(grupo, "Estado", f"fos_{i}_estado")
+            add(grupo, "RND tiempo Revision", f"fos_{i}_rnd_tiempo")
+            add(grupo, "Demora Revision", f"fos_{i}_demora")
+            add(grupo, "Finaliza Revision", f"fos_{i}_fin")
+
+    if cantidad_fosas == 1:
+        add("Columnas auxiliares", "Hora inicio ocupacion fosa", "aux_h_ini_fosa_1")
+        add("Columnas auxiliares", "Hora fin ocupacion fosa", "aux_h_fin_fosa_1")
+    else:
+        for i in range(1, cantidad_fosas + 1):
+            add("Columnas auxiliares", f"Hora inicio ocupacion fosa {i}", f"aux_h_ini_fosa_{i}")
+            add("Columnas auxiliares", f"Hora fin ocupacion fosa {i}", f"aux_h_fin_fosa_{i}")
+
+    add("Columnas auxiliares", "ACU tiempo ocupacion fosa", "aux_acu_fosa")
+
+    for tipo in tipos_clientes:
+        add("Columnas auxiliares", f"ACU de espera {tipo['codigo']}", f"aux_acu_espera_{tipo['id']}")
+
+    for tipo in tipos_clientes:
+        add("Columnas auxiliares", f"Cont {tipo['codigo']} cola documental", f"aux_cont_doc_{tipo['id']}")
+
+    add("Columnas auxiliares", "Cont Camiones en sistema", "aux_cam_sistema")
+    add("Columnas auxiliares", "Max camiones", "aux_max_cam")
+
+    return cols, keys
+
+
+def build_multiindex_df(rows_internal: list, tipos_clientes: list, puestos_documentales: int, cantidad_fosas: int) -> pd.DataFrame:
+    cols, keys = construir_columnas(tipos_clientes, puestos_documentales, cantidad_fosas)
 
     camion_ids = set()
     for row in rows_internal:
@@ -169,15 +176,14 @@ def build_multiindex_df(rows_internal: list) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# SIMULACION
+# SIMULACIÓN
 # ---------------------------------------------------------------------------
 
 def simular(
     X: float,
     N: int,
     seed: Optional[int],
-    media_CCG: float,
-    media_CCP: float,
+    tipos_clientes: list,
     doc_min: float,
     doc_max: float,
     prob_fisica: float,
@@ -185,6 +191,7 @@ def simular(
     fis_max: float,
     ventana_fin: float,
     puestos_documentales: int,
+    cantidad_fosas: int,
 ):
     if seed is not None:
         random.seed(seed)
@@ -194,120 +201,105 @@ def simular(
     id_counter = 0
 
     camiones = {}
-    cola_ccg = []
-    cola_ccp = []
+    colas_doc = {tipo["id"]: [] for tipo in tipos_clientes}
     cola_fisica = []
 
     servidores = [Servidor(id=i + 1, estado="Libre") for i in range(puestos_documentales)]
-    fosa = Fosa(estado="Libre")
+    fosas = [Fosa(id=i + 1, estado="Libre") for i in range(cantidad_fosas)]
 
-    prox_ccg = None
-    prox_ccp = None
+    prox_llegadas = {tipo["id"]: None for tipo in tipos_clientes}
     ventana_cerrada = False
     final_corte_guardado = False
 
-    acum_espera_ccg = 0.0
-    acum_espera_ccp = 0.0
-    cont_ccg_doc = 0
-    cont_ccp_doc = 0
+    acum_espera = {tipo["id"]: 0.0 for tipo in tipos_clientes}
+    cont_doc = {tipo["id"]: 0 for tipo in tipos_clientes}
     acum_ocup_fosa = 0.0
     camiones_sistema = 0
     max_camiones = 0
 
     rows = []
+    tipos_por_id = {tipo["id"]: tipo for tipo in tipos_clientes}
+    orden_prioridad = sorted(tipos_clientes, key=lambda t: (t["prioridad"], t["id"]))
 
-    # -----------------------------------------------------------------------
-    # Funciones internas
-    # -----------------------------------------------------------------------
+    def nombre_tipo(tid: int) -> str:
+        return tipos_por_id[tid]["codigo"]
 
     def nombre_prox_evento():
         candidatos = []
-        if prox_ccg is not None:
-            candidatos.append(("Llegada CCG", prox_ccg))
-        if prox_ccp is not None:
-            candidatos.append(("Llegada CCP", prox_ccp))
+        for tipo in tipos_clientes:
+            tid = tipo["id"]
+            if prox_llegadas[tid] is not None:
+                candidatos.append((f"Llegada {tipo['codigo']}", prox_llegadas[tid]))
         for serv in servidores:
             if serv.fin is not None:
                 candidatos.append((f"Fin Doc P{serv.id}", serv.fin))
-        if fosa.fin is not None:
-            candidatos.append(("Fin Revision Fisica", fosa.fin))
+        for fosa in fosas:
+            if fosa.fin is not None:
+                candidatos.append((f"Fin Revision Fisica F{fosa.id}", fosa.fin))
         if not ventana_cerrada:
             candidatos.append(("Cierre ventana", ventana_fin))
         candidatos.append(("Fin simulacion", X))
-
         if not candidatos:
             return None
         return min(candidatos, key=lambda x: x[1])[0]
 
     def guardar_fila(
         evento,
-        rnd_ccg_f=None,
-        dem_ccg_f=None,
-        rnd_ccp_f=None,
-        dem_ccp_f=None,
+        rnd_lleg_dict=None,
+        dem_lleg_dict=None,
         rnd_doc_dict=None,
         dem_doc_dict=None,
         rnd_dec=None,
         situacion=None,
-        rnd_fis=None,
-        dem_fis=None,
-        fin_fosa_liberada=None,
+        rnd_fis_dict=None,
+        dem_fis_dict=None,
+        fin_fosa_liberada_dict=None,
         mostrar_temporales=True,
     ):
         nonlocal iteracion
 
+        rnd_lleg_dict = rnd_lleg_dict or {}
+        dem_lleg_dict = dem_lleg_dict or {}
         rnd_doc_dict = rnd_doc_dict or {}
         dem_doc_dict = dem_doc_dict or {}
+        rnd_fis_dict = rnd_fis_dict or {}
+        dem_fis_dict = dem_fis_dict or {}
+        fin_fosa_liberada_dict = fin_fosa_liberada_dict or {}
 
         row = {
             "ctrl_evento": evento,
             "ctrl_reloj": fmt(reloj),
             "ctrl_prox_evento": nombre_prox_evento(),
-
-            "ccg_rnd": round(rnd_ccg_f, 6) if rnd_ccg_f is not None else None,
-            "ccg_demora": fmt(dem_ccg_f),
-            "ccg_prox": fmt(prox_ccg),
-
-            "ccp_rnd": round(rnd_ccp_f, 6) if rnd_ccp_f is not None else None,
-            "ccp_demora": fmt(dem_ccp_f),
-            "ccp_prox": fmt(prox_ccp),
-
-            "cola_ccg": len(cola_ccg),
-            "cola_ccp": len(cola_ccp),
-
-            "p1_estado": servidores[0].estado if len(servidores) > 0 else None,
-            "p1_rnd": round(rnd_doc_dict.get(1), 6) if 1 in rnd_doc_dict else None,
-            "p1_demora": fmt(dem_doc_dict.get(1)),
-            "p1_fin": fmt(servidores[0].fin) if len(servidores) > 0 else None,
-
-            "p2_estado": servidores[1].estado if len(servidores) > 1 else None,
-            "p2_rnd": round(rnd_doc_dict.get(2), 6) if 2 in rnd_doc_dict else None,
-            "p2_demora": fmt(dem_doc_dict.get(2)),
-            "p2_fin": fmt(servidores[1].fin) if len(servidores) > 1 else None,
-
-            "p3_estado": servidores[2].estado if len(servidores) > 2 else None,
-            "p3_rnd": round(rnd_doc_dict.get(3), 6) if 3 in rnd_doc_dict else None,
-            "p3_demora": fmt(dem_doc_dict.get(3)),
-            "p3_fin": fmt(servidores[2].fin) if len(servidores) > 2 else None,
-
             "fis_rnd_dec": round(rnd_dec, 6) if rnd_dec is not None else None,
             "fis_situacion": situacion,
-            "fos_estado": fosa.estado,
             "fos_cola": len(cola_fisica),
-            "fis_rnd_tiempo": round(rnd_fis, 6) if rnd_fis is not None else None,
-            "fis_demora": fmt(dem_fis),
-            "fis_fin": fmt(fosa.fin),
-
-            "aux_h_ini_fosa": fmt(fosa.inicio_ocupacion),
-            "aux_h_fin_fosa": fmt(fin_fosa_liberada),
             "aux_acu_fosa": fmt(acum_ocup_fosa),
-            "aux_acu_espera_ccg": fmt(acum_espera_ccg),
-            "aux_acu_espera_ccp": fmt(acum_espera_ccp),
-            "aux_cont_ccg": cont_ccg_doc,
-            "aux_cont_ccp": cont_ccp_doc,
             "aux_cam_sistema": camiones_sistema,
             "aux_max_cam": max_camiones,
         }
+
+        for tipo in tipos_clientes:
+            tid = tipo["id"]
+            row[f"lleg_{tid}_rnd"] = round(rnd_lleg_dict[tid], 6) if tid in rnd_lleg_dict else None
+            row[f"lleg_{tid}_demora"] = fmt(dem_lleg_dict.get(tid))
+            row[f"lleg_{tid}_prox"] = fmt(prox_llegadas.get(tid))
+            row[f"cola_doc_{tid}"] = len(colas_doc[tid])
+            row[f"aux_acu_espera_{tid}"] = fmt(acum_espera[tid])
+            row[f"aux_cont_doc_{tid}"] = cont_doc[tid]
+
+        for serv in servidores:
+            row[f"p{serv.id}_estado"] = serv.estado
+            row[f"p{serv.id}_rnd"] = round(rnd_doc_dict[serv.id], 6) if serv.id in rnd_doc_dict else None
+            row[f"p{serv.id}_demora"] = fmt(dem_doc_dict.get(serv.id))
+            row[f"p{serv.id}_fin"] = fmt(serv.fin)
+
+        for fosa in fosas:
+            row[f"fos_{fosa.id}_estado"] = fosa.estado
+            row[f"fos_{fosa.id}_rnd_tiempo"] = round(rnd_fis_dict[fosa.id], 6) if fosa.id in rnd_fis_dict else None
+            row[f"fos_{fosa.id}_demora"] = fmt(dem_fis_dict.get(fosa.id))
+            row[f"fos_{fosa.id}_fin"] = fmt(fosa.fin)
+            row[f"aux_h_ini_fosa_{fosa.id}"] = fmt(fosa.inicio_ocupacion)
+            row[f"aux_h_fin_fosa_{fosa.id}"] = fmt(fin_fosa_liberada_dict.get(fosa.id))
 
         if mostrar_temporales:
             for cid, camion in sorted(camiones.items()):
@@ -327,17 +319,16 @@ def simular(
             return
 
         reloj = float(X)
-
-        if fosa.estado == "Ocupado" and fosa.inicio_ocupacion is not None:
-            if float(X) > fosa.inicio_ocupacion:
-                acum_ocup_fosa += float(X) - fosa.inicio_ocupacion
+        for fosa in fosas:
+            if fosa.estado == "Ocupado" and fosa.inicio_ocupacion is not None:
+                if float(X) > fosa.inicio_ocupacion:
+                    acum_ocup_fosa += float(X) - fosa.inicio_ocupacion
 
         guardar_fila("Fin simulacion", mostrar_temporales=False)
         final_corte_guardado = True
 
     def asignar_documentales():
-        nonlocal acum_espera_ccg, acum_espera_ccp
-        nonlocal cont_ccg_doc, cont_ccp_doc
+        nonlocal acum_espera, cont_doc
 
         rnd_doc_dict = {}
         dem_doc_dict = {}
@@ -346,22 +337,20 @@ def simular(
             if serv.estado != "Libre":
                 continue
 
-            if cola_ccp:
-                cid = cola_ccp.pop(0)
-            elif cola_ccg:
-                cid = cola_ccg.pop(0)
-            else:
+            cid = None
+            for tipo in orden_prioridad:
+                tid = tipo["id"]
+                if colas_doc[tid]:
+                    cid = colas_doc[tid].pop(0)
+                    break
+
+            if cid is None:
                 break
 
             camion = camiones[cid]
             espera = reloj - camion.h_llegada
-
-            if camion.tipo == "CCG":
-                acum_espera_ccg += espera
-                cont_ccg_doc += 1
-            else:
-                acum_espera_ccp += espera
-                cont_ccp_doc += 1
+            acum_espera[camion.tipo_id] += espera
+            cont_doc[camion.tipo_id] += 1
 
             rnd_d = random.random()
             dem_d = uniforme(doc_min, doc_max, rnd_d)
@@ -379,7 +368,15 @@ def simular(
         return rnd_doc_dict, dem_doc_dict
 
     def iniciar_fisica():
-        if cola_fisica and fosa.estado == "Libre":
+        rnd_fis_dict = {}
+        dem_fis_dict = {}
+
+        for fosa in fosas:
+            if not cola_fisica:
+                break
+            if fosa.estado != "Libre":
+                continue
+
             cid = cola_fisica.pop(0)
             camion = camiones[cid]
 
@@ -393,56 +390,47 @@ def simular(
 
             camion.estado = "En revisión física"
 
-            return rnd_f, dem_f
+            rnd_fis_dict[fosa.id] = rnd_f
+            dem_fis_dict[fosa.id] = dem_f
 
-        return None, None
+        return rnd_fis_dict, dem_fis_dict
 
     def candidatos_evento():
         candidatos = []
-        if prox_ccg is not None:
-            candidatos.append(("Llegada CCG", prox_ccg))
-        if prox_ccp is not None:
-            candidatos.append(("Llegada CCP", prox_ccp))
+        for tipo in tipos_clientes:
+            tid = tipo["id"]
+            if prox_llegadas[tid] is not None:
+                candidatos.append((f"Llegada {tipo['codigo']}", prox_llegadas[tid], tid))
         for serv in servidores:
             if serv.fin is not None:
-                candidatos.append((f"Fin Doc P{serv.id}", serv.fin))
-        if fosa.fin is not None:
-            candidatos.append(("Fin Revision Fisica", fosa.fin))
+                candidatos.append((f"Fin Doc P{serv.id}", serv.fin, serv.id))
+        for fosa in fosas:
+            if fosa.fin is not None:
+                candidatos.append((f"Fin Revision Fisica F{fosa.id}", fosa.fin, fosa.id))
         if not ventana_cerrada:
-            candidatos.append(("Cierre ventana", ventana_fin))
-        candidatos.append(("Fin simulacion", X))
+            candidatos.append(("Cierre ventana", ventana_fin, None))
+        candidatos.append(("Fin simulacion", X, None))
         return candidatos
 
-    # -----------------------------------------------------------------------
-    # Inicialización de próximas llegadas
-    # -----------------------------------------------------------------------
+    # Inicializar próximas llegadas
+    rnd_lleg_inicial = {}
+    dem_lleg_inicial = {}
+    for tipo in tipos_clientes:
+        tid = tipo["id"]
+        rnd = random.random()
+        demora = exp_neg(tipo["media"], rnd)
+        prox_llegadas[tid] = demora if demora <= ventana_fin else None
+        rnd_lleg_inicial[tid] = rnd
+        dem_lleg_inicial[tid] = demora
 
-    rnd_ccg0 = random.random()
-    dem_ccg0 = exp_neg(media_CCG, rnd_ccg0)
-    prox_ccg = dem_ccg0 if dem_ccg0 <= ventana_fin else None
-
-    rnd_ccp0 = random.random()
-    dem_ccp0 = exp_neg(media_CCP, rnd_ccp0)
-    prox_ccp = dem_ccp0 if dem_ccp0 <= ventana_fin else None
-
-    guardar_fila(
-        "Inicio",
-        rnd_ccg_f=rnd_ccg0,
-        dem_ccg_f=dem_ccg0,
-        rnd_ccp_f=rnd_ccp0,
-        dem_ccp_f=dem_ccp0,
-    )
-
-    # -----------------------------------------------------------------------
-    # Loop principal
-    # -----------------------------------------------------------------------
+    guardar_fila("Inicio", rnd_lleg_dict=rnd_lleg_inicial, dem_lleg_dict=dem_lleg_inicial)
 
     while iteracion < N:
         candidatos = candidatos_evento()
         if not candidatos:
             break
 
-        evento, tiempo_evento = min(candidatos, key=lambda x: x[1])
+        evento, tiempo_evento, referencia = min(candidatos, key=lambda x: x[1])
 
         if tiempo_evento > X:
             guardar_fila_final_corte()
@@ -450,62 +438,40 @@ def simular(
 
         reloj = tiempo_evento
 
-        if evento == "Llegada CCG":
+        if evento.startswith("Llegada"):
+            tid = referencia
+            tipo = tipos_por_id[tid]
+
             id_counter += 1
             camion = Camion(
                 id=id_counter,
-                tipo="CCG",
+                tipo_id=tid,
+                tipo=tipo["codigo"],
                 h_llegada=reloj,
                 estado="En cola documental",
             )
             camiones[camion.id] = camion
-            cola_ccg.append(camion.id)
+            colas_doc[tid].append(camion.id)
+
             camiones_sistema += 1
             max_camiones = max(max_camiones, camiones_sistema)
 
             rnd_l = random.random()
-            dem_l = exp_neg(media_CCG, rnd_l)
+            dem_l = exp_neg(tipo["media"], rnd_l)
             nueva_llegada = reloj + dem_l
-            prox_ccg = nueva_llegada if nueva_llegada <= ventana_fin and not ventana_cerrada else None
+            prox_llegadas[tid] = nueva_llegada if nueva_llegada <= ventana_fin and not ventana_cerrada else None
 
             rnd_doc_d, dem_doc_d = asignar_documentales()
             guardar_fila(
-                "Llegada CCG",
-                rnd_ccg_f=rnd_l,
-                dem_ccg_f=dem_l,
-                rnd_doc_dict=rnd_doc_d,
-                dem_doc_dict=dem_doc_d,
-            )
-
-        elif evento == "Llegada CCP":
-            id_counter += 1
-            camion = Camion(
-                id=id_counter,
-                tipo="CCP",
-                h_llegada=reloj,
-                estado="En cola documental",
-            )
-            camiones[camion.id] = camion
-            cola_ccp.append(camion.id)
-            camiones_sistema += 1
-            max_camiones = max(max_camiones, camiones_sistema)
-
-            rnd_l = random.random()
-            dem_l = exp_neg(media_CCP, rnd_l)
-            nueva_llegada = reloj + dem_l
-            prox_ccp = nueva_llegada if nueva_llegada <= ventana_fin and not ventana_cerrada else None
-
-            rnd_doc_d, dem_doc_d = asignar_documentales()
-            guardar_fila(
-                "Llegada CCP",
-                rnd_ccp_f=rnd_l,
-                dem_ccp_f=dem_l,
+                f"Llegada {tipo['codigo']}",
+                rnd_lleg_dict={tid: rnd_l},
+                dem_lleg_dict={tid: dem_l},
                 rnd_doc_dict=rnd_doc_d,
                 dem_doc_dict=dem_doc_d,
             )
 
         elif evento.startswith("Fin Doc P"):
-            sid = int(evento[-1])
+            sid = referencia
             serv = servidores[sid - 1]
             cid = serv.id_camion
             camion = camiones[cid]
@@ -515,14 +481,14 @@ def simular(
             serv.fin = None
 
             rnd_dec = random.random()
-            rnd_fis = None
-            dem_fis = None
+            rnd_fis_dict = {}
+            dem_fis_dict = {}
 
             if rnd_dec < prob_fisica:
                 situacion = "Va a Revision"
                 camion.estado = "En cola física"
                 cola_fisica.append(cid)
-                rnd_fis, dem_fis = iniciar_fisica()
+                rnd_fis_dict, dem_fis_dict = iniciar_fisica()
             else:
                 situacion = "No Va a Revision"
                 camion.estado = "Destruido"
@@ -533,13 +499,15 @@ def simular(
                 evento,
                 rnd_dec=rnd_dec,
                 situacion=situacion,
-                rnd_fis=rnd_fis,
-                dem_fis=dem_fis,
+                rnd_fis_dict=rnd_fis_dict,
+                dem_fis_dict=dem_fis_dict,
                 rnd_doc_dict=rnd_doc_d,
                 dem_doc_dict=dem_doc_d,
             )
 
-        elif evento == "Fin Revision Fisica":
+        elif evento.startswith("Fin Revision Fisica"):
+            fosa_id = referencia
+            fosa = fosas[fosa_id - 1]
             fin_fosa = reloj
             acum_ocup_fosa += reloj - fosa.inicio_ocupacion
 
@@ -552,18 +520,18 @@ def simular(
             fosa.inicio_ocupacion = None
             fosa.fin = None
 
-            rnd_fis, dem_fis = iniciar_fisica()
+            rnd_fis_dict, dem_fis_dict = iniciar_fisica()
             guardar_fila(
-                "Fin Revision Fisica",
-                rnd_fis=rnd_fis,
-                dem_fis=dem_fis,
-                fin_fosa_liberada=fin_fosa,
+                evento,
+                rnd_fis_dict=rnd_fis_dict,
+                dem_fis_dict=dem_fis_dict,
+                fin_fosa_liberada_dict={fosa_id: fin_fosa},
             )
 
         elif evento == "Cierre ventana":
             ventana_cerrada = True
-            prox_ccg = None
-            prox_ccp = None
+            for tid in prox_llegadas:
+                prox_llegadas[tid] = None
             guardar_fila("Cierre ventana")
 
         elif evento == "Fin simulacion":
@@ -577,10 +545,8 @@ def simular(
     return (
         rows,
         camiones,
-        acum_espera_ccg,
-        acum_espera_ccp,
-        cont_ccg_doc,
-        cont_ccp_doc,
+        acum_espera,
+        cont_doc,
         acum_ocup_fosa,
         max_camiones,
     )
@@ -606,8 +572,8 @@ st.markdown(
     width: 100% !important;
 }
 [data-testid="stSidebar"] {
-    min-width: 250px;
-    max-width: 290px;
+    min-width: 260px;
+    max-width: 320px;
 }
 div.stButton > button {
     background-color: #c0392b;
@@ -642,24 +608,61 @@ i_rows = st.sidebar.number_input("Filas a mostrar i", min_value=1, max_value=100
 j_min = st.sidebar.number_input("Minuto inicio visualizacion j", min_value=0, max_value=100000, value=0, step=1)
 seed_input = st.sidebar.text_input("Semilla opcional", value="")
 
-st.sidebar.subheader("Llegadas")
-media_CCG = st.sidebar.number_input("Media llegada CCG", value=15.0, min_value=0.1)
-media_CCP = st.sidebar.number_input("Media llegada CCP", value=40.0, min_value=0.1)
+st.sidebar.subheader("Tipos de clientes")
+cantidad_tipos = st.sidebar.number_input("Cantidad de tipos de clientes", min_value=1, max_value=6, value=2, step=1)
+
+tipos_clientes = []
+for idx in range(1, int(cantidad_tipos) + 1):
+    if idx == 1:
+        codigo_default = "CCG"
+        nombre_default = "Camión con Carga general"
+        media_default = 15.0
+        prioridad_default = 2
+    elif idx == 2:
+        codigo_default = "CCP"
+        nombre_default = "Camión con Carga perecedera"
+        media_default = 40.0
+        prioridad_default = 1
+    else:
+        codigo_default = f"C{idx}"
+        nombre_default = f"Cliente {idx}"
+        media_default = 30.0
+        prioridad_default = idx
+
+    with st.sidebar.expander(f"Cliente tipo {idx}", expanded=(idx <= 2)):
+        codigo = st.text_input(f"Código tipo {idx}", value=codigo_default, key=f"cod_{idx}").strip()
+        nombre = st.text_input(f"Nombre tipo {idx}", value=nombre_default, key=f"nom_{idx}").strip()
+        media = st.number_input(f"Media llegada tipo {idx}", value=media_default, min_value=0.1, key=f"media_{idx}")
+        prioridad = st.number_input(
+            f"Prioridad documental tipo {idx} (1 = mayor prioridad)",
+            value=prioridad_default,
+            min_value=1,
+            max_value=99,
+            step=1,
+            key=f"prio_{idx}",
+        )
+
+    tipos_clientes.append({
+        "id": idx,
+        "codigo": codigo if codigo else f"C{idx}",
+        "nombre": nombre if nombre else f"Cliente {idx}",
+        "media": float(media),
+        "prioridad": int(prioridad),
+    })
 
 st.sidebar.subheader("Control documental")
+puestos_documentales = st.sidebar.number_input("Cantidad de servidores documentales", value=3, min_value=1, max_value=10, step=1)
 doc_min = st.sidebar.number_input("Revision documental minima", value=10.0, min_value=0.1)
 doc_max = st.sidebar.number_input("Revision documental maxima", value=15.0, min_value=0.1)
 
 st.sidebar.subheader("Revision fisica")
+cantidad_fosas = st.sidebar.number_input("Cantidad de servidores de fosa", value=1, min_value=1, max_value=10, step=1)
 prob_fisica = st.sidebar.slider("Probabilidad revision fisica", 0.0, 1.0, 0.15, 0.01)
 fis_min = st.sidebar.number_input("Revision fisica minima", value=30.0, min_value=0.1)
 fis_max = st.sidebar.number_input("Revision fisica maxima", value=60.0, min_value=0.1)
 
 st.sidebar.subheader("Ventana operativa")
 ventana_fin = st.sidebar.number_input("Cierre de ventana operativa", value=720, min_value=1)
-
-st.sidebar.subheader("Infraestructura")
-puestos_documentales = st.sidebar.number_input("Puestos documentales", value=3, min_value=1, max_value=3)
 
 errores = []
 if X <= 0:
@@ -676,6 +679,8 @@ if fis_max < fis_min:
     errores.append("La revision fisica maxima debe ser mayor o igual a la minima.")
 if ventana_fin <= 0:
     errores.append("El cierre de ventana debe ser mayor a 0.")
+if len(set(t["codigo"] for t in tipos_clientes)) != len(tipos_clientes):
+    errores.append("Los códigos de tipos de clientes no deben repetirse.")
 
 for error in errores:
     st.error(error)
@@ -687,18 +692,15 @@ if st.button("Simular", use_container_width=True) and not errores:
         (
             rows,
             camiones,
-            acum_esp_ccg,
-            acum_esp_ccp,
-            cnt_ccg,
-            cnt_ccp,
+            acum_espera,
+            cont_doc,
             acum_fosa,
             max_cam,
         ) = simular(
             X=float(X),
             N=int(N),
             seed=seed,
-            media_CCG=float(media_CCG),
-            media_CCP=float(media_CCP),
+            tipos_clientes=tipos_clientes,
             doc_min=float(doc_min),
             doc_max=float(doc_max),
             prob_fisica=float(prob_fisica),
@@ -706,33 +708,48 @@ if st.button("Simular", use_container_width=True) and not errores:
             fis_max=float(fis_max),
             ventana_fin=float(ventana_fin),
             puestos_documentales=int(puestos_documentales),
+            cantidad_fosas=int(cantidad_fosas),
         )
 
-    df_full = build_multiindex_df(rows)
+    df_full = build_multiindex_df(rows, tipos_clientes, int(puestos_documentales), int(cantidad_fosas))
 
     st.subheader("Metricas finales")
-    esp_ccg = acum_esp_ccg / cnt_ccg if cnt_ccg > 0 else 0.0
-    esp_ccp = acum_esp_ccp / cnt_ccp if cnt_ccp > 0 else 0.0
-    util_fosa = acum_fosa / float(X) * 100
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Espera prom. CCG", f"{esp_ccg:.2f} min")
-    c2.metric("Espera prom. CCP", f"{esp_ccp:.2f} min")
-    c3.metric("Utilizacion fosa", f"{util_fosa:.2f} %")
-    c4.metric("Max. camiones", str(max_cam))
+    metric_cols = st.columns(min(4, len(tipos_clientes) + 2))
+    col_idx = 0
+    esperas = {}
+    for tipo in tipos_clientes:
+        tid = tipo["id"]
+        espera_prom = acum_espera[tid] / cont_doc[tid] if cont_doc[tid] > 0 else 0.0
+        esperas[tid] = espera_prom
+        metric_cols[col_idx % len(metric_cols)].metric(
+            f"Espera prom. {tipo['codigo']}",
+            f"{espera_prom:.2f} min",
+        )
+        col_idx += 1
+
+    util_fosa = acum_fosa / float(X) * 100
+    metric_cols[col_idx % len(metric_cols)].metric("Utilizacion fosa", f"{util_fosa:.2f} %")
+    col_idx += 1
+    metric_cols[col_idx % len(metric_cols)].metric("Max. camiones", str(max_cam))
 
     with st.expander("Formulas utilizadas"):
-        st.markdown(
-            f"""
-- Espera promedio CCG = ACU de espera CCG / Cont CCG cola documental = {acum_esp_ccg:.4f} / {cnt_ccg} = {esp_ccg:.4f} min
-- Espera promedio CCP = ACU de espera CCP / cont CCP cola documental = {acum_esp_ccp:.4f} / {cnt_ccp} = {esp_ccp:.4f} min
-- Utilizacion fosa = ACU tiempo ocupacion fosa / Tiempo total simulado x 100 = {acum_fosa:.4f} / {float(X):.4f} x 100 = {util_fosa:.4f} %
-- Maximo camiones simultaneos = max(Cont Camiones en sistema) = {max_cam}
-"""
+        lineas = []
+        for tipo in tipos_clientes:
+            tid = tipo["id"]
+            lineas.append(
+                f"- Espera promedio {tipo['codigo']} = ACU de espera {tipo['codigo']} / "
+                f"Cont {tipo['codigo']} cola documental = {acum_espera[tid]:.4f} / "
+                f"{cont_doc[tid]} = {esperas[tid]:.4f} min"
+            )
+        lineas.append(
+            f"- Utilizacion fosa = ACU tiempo ocupacion fosa / Tiempo total simulado x 100 = "
+            f"{acum_fosa:.4f} / {float(X):.4f} x 100 = {util_fosa:.4f} %"
         )
+        lineas.append(f"- Maximo camiones simultaneos = max(Cont Camiones en sistema) = {max_cam}")
+        st.markdown("\n".join(lineas))
 
     reloj_col = ("Control", "Reloj")
-
     df_filtrado = df_full[df_full[reloj_col] >= float(j_min)].head(int(i_rows))
     df_ultima = df_full.tail(1)
 
