@@ -313,18 +313,26 @@ def simular(
         rows.append(row)
         iteracion += 1
 
-    def guardar_fila_final_corte():
+    def guardar_fila_final_corte(tiempo_corte: Optional[float] = None, evento_final: str = "Fin simulacion"):
         nonlocal reloj, acum_ocup_fosa, final_corte_guardado
         if final_corte_guardado:
             return
 
-        reloj = float(X)
+        if tiempo_corte is None:
+            tiempo_corte = float(X)
+
+        tiempo_corte = float(tiempo_corte)
+        reloj = tiempo_corte
+
+        # Al cortar la simulación se debe sumar solamente el tramo ocupado
+        # desde el inicio de ocupación hasta el instante real de corte.
+        # Si N corta antes que X, NO corresponde saltar hasta X.
         for fosa in fosas:
             if fosa.estado == "Ocupado" and fosa.inicio_ocupacion is not None:
-                if float(X) > fosa.inicio_ocupacion:
-                    acum_ocup_fosa += float(X) - fosa.inicio_ocupacion
+                tiempo_ocupado_pendiente = max(0.0, tiempo_corte - fosa.inicio_ocupacion)
+                acum_ocup_fosa += tiempo_ocupado_pendiente
 
-        guardar_fila("Fin simulacion", mostrar_temporales=False)
+        guardar_fila(evento_final, mostrar_temporales=False)
         final_corte_guardado = True
 
     def asignar_documentales():
@@ -433,7 +441,7 @@ def simular(
         evento, tiempo_evento, referencia = min(candidatos, key=lambda x: x[1])
 
         if tiempo_evento > X:
-            guardar_fila_final_corte()
+            guardar_fila_final_corte(float(X), "Fin simulacion")
             break
 
         reloj = tiempo_evento
@@ -535,12 +543,16 @@ def simular(
             guardar_fila("Cierre ventana")
 
         elif evento == "Fin simulacion":
-            guardar_fila_final_corte()
+            guardar_fila_final_corte(float(X), "Fin simulacion")
             break
 
-    if rows:
-        if round(rows[-1].get("ctrl_reloj", -1), 4) != round(float(X), 4):
-            guardar_fila_final_corte()
+    if rows and not final_corte_guardado:
+        # Si se agotó N antes de llegar a X, el corte real es el reloj actual.
+        # Las métricas quedan parciales y no deben proyectarse hasta X.
+        if iteracion >= N and reloj < float(X):
+            guardar_fila_final_corte(reloj, "Corte por limite de iteraciones")
+        else:
+            guardar_fila_final_corte(float(X), "Fin simulacion")
 
     return (
         rows,
@@ -602,14 +614,14 @@ div.stButton > button:focus {
 
 st.sidebar.header("Parametros de simulacion")
 
-X = st.sidebar.number_input("Tiempo total X (min)", min_value=1, max_value=10000, value=720, step=1)
-N = st.sidebar.number_input("Iteraciones maximas N", min_value=1, max_value=100000, value=1000, step=1)
-i_rows = st.sidebar.number_input("Filas a mostrar i", min_value=1, max_value=100000, value=50, step=1)
-j_min = st.sidebar.number_input("Minuto inicio visualizacion j", min_value=0, max_value=100000, value=0, step=1)
+X = st.sidebar.number_input("Tiempo total X (min)", min_value=1, value=720, step=1)
+N = st.sidebar.number_input("Iteraciones maximas N", min_value=1, value=1000, step=1)
+i_rows = st.sidebar.number_input("Filas a mostrar i", min_value=1, value=50, step=1)
+j_min = st.sidebar.number_input("Minuto inicio visualizacion j", min_value=0, value=0, step=1)
 seed_input = st.sidebar.text_input("Semilla opcional", value="")
 
 st.sidebar.subheader("Tipos de clientes")
-cantidad_tipos = st.sidebar.number_input("Cantidad de tipos de clientes", min_value=1, max_value=6, value=2, step=1)
+cantidad_tipos = st.sidebar.number_input("Cantidad de tipos de clientes", min_value=1, value=2, step=1)
 
 tipos_clientes = []
 for idx in range(1, int(cantidad_tipos) + 1):
@@ -632,12 +644,11 @@ for idx in range(1, int(cantidad_tipos) + 1):
     with st.sidebar.expander(f"Cliente tipo {idx}", expanded=(idx <= 2)):
         codigo = st.text_input(f"Código tipo {idx}", value=codigo_default, key=f"cod_{idx}").strip()
         nombre = st.text_input(f"Nombre tipo {idx}", value=nombre_default, key=f"nom_{idx}").strip()
-        media = st.number_input(f"Media llegada tipo {idx}", value=media_default, min_value=0.1, key=f"media_{idx}")
+        media = st.number_input(f"Media llegada tipo {idx}", value=media_default, min_value=0.0001, key=f"media_{idx}")
         prioridad = st.number_input(
             f"Prioridad documental tipo {idx} (1 = mayor prioridad)",
             value=prioridad_default,
             min_value=1,
-            max_value=99,
             step=1,
             key=f"prio_{idx}",
         )
@@ -651,15 +662,15 @@ for idx in range(1, int(cantidad_tipos) + 1):
     })
 
 st.sidebar.subheader("Control documental")
-puestos_documentales = st.sidebar.number_input("Cantidad de servidores documentales", value=3, min_value=1, max_value=10, step=1)
-doc_min = st.sidebar.number_input("Revision documental minima", value=10.0, min_value=0.1)
-doc_max = st.sidebar.number_input("Revision documental maxima", value=15.0, min_value=0.1)
+puestos_documentales = st.sidebar.number_input("Cantidad de servidores documentales", value=3, min_value=1, step=1)
+doc_min = st.sidebar.number_input("Revision documental minima", value=10.0, min_value=0.0)
+doc_max = st.sidebar.number_input("Revision documental maxima", value=15.0, min_value=0.0)
 
 st.sidebar.subheader("Revision fisica")
-cantidad_fosas = st.sidebar.number_input("Cantidad de servidores de fosa", value=1, min_value=1, max_value=10, step=1)
+cantidad_fosas = st.sidebar.number_input("Cantidad de servidores de fosa", value=1, min_value=1, step=1)
 prob_fisica = st.sidebar.slider("Probabilidad revision fisica", 0.0, 1.0, 0.15, 0.01)
-fis_min = st.sidebar.number_input("Revision fisica minima", value=30.0, min_value=0.1)
-fis_max = st.sidebar.number_input("Revision fisica maxima", value=60.0, min_value=0.1)
+fis_min = st.sidebar.number_input("Revision fisica minima", value=30.0, min_value=0.0)
+fis_max = st.sidebar.number_input("Revision fisica maxima", value=60.0, min_value=0.0)
 
 st.sidebar.subheader("Ventana operativa")
 ventana_fin = st.sidebar.number_input("Cierre de ventana operativa", value=720, min_value=1)
@@ -679,8 +690,9 @@ if fis_max < fis_min:
     errores.append("La revision fisica maxima debe ser mayor o igual a la minima.")
 if ventana_fin <= 0:
     errores.append("El cierre de ventana debe ser mayor a 0.")
-if len(set(t["codigo"] for t in tipos_clientes)) != len(tipos_clientes):
-    errores.append("Los códigos de tipos de clientes no deben repetirse.")
+for tipo in tipos_clientes:
+    if tipo["media"] <= 0:
+        errores.append(f"La media de llegada de {tipo['codigo']} debe ser mayor a 0.")
 
 for error in errores:
     st.error(error)
@@ -728,7 +740,15 @@ if st.button("Simular", use_container_width=True) and not errores:
         )
         col_idx += 1
 
-    util_fosa = acum_fosa / float(X) * 100
+    tiempo_simulado = float(rows[-1]["ctrl_reloj"]) if rows else 0.0
+    util_fosa = (acum_fosa / tiempo_simulado * 100) if tiempo_simulado > 0 else 0.0
+
+    if tiempo_simulado < float(X):
+        st.warning(
+            f"La simulación se cortó en el minuto {tiempo_simulado:.4f} por límite de iteraciones N. "
+            "Las métricas son parciales y la utilización se calcula hasta ese instante de corte."
+        )
+
     metric_cols[col_idx % len(metric_cols)].metric("Utilizacion fosa", f"{util_fosa:.2f} %")
     col_idx += 1
     metric_cols[col_idx % len(metric_cols)].metric("Max. camiones", str(max_cam))
@@ -744,7 +764,7 @@ if st.button("Simular", use_container_width=True) and not errores:
             )
         lineas.append(
             f"- Utilizacion fosa = ACU tiempo ocupacion fosa / Tiempo total simulado x 100 = "
-            f"{acum_fosa:.4f} / {float(X):.4f} x 100 = {util_fosa:.4f} %"
+            f"{acum_fosa:.4f} / {tiempo_simulado:.4f} x 100 = {util_fosa:.4f} %"
         )
         lineas.append(f"- Maximo camiones simultaneos = max(Cont Camiones en sistema) = {max_cam}")
         st.markdown("\n".join(lineas))
