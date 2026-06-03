@@ -858,7 +858,7 @@ st.sidebar.header("Parametros de simulacion")
 N = st.sidebar.number_input("Iteraciones maximas N", min_value=1, value=10000, step=1)
 mostrar_todas = st.sidebar.checkbox("Mostrar todas las filas", value=False)
 if not mostrar_todas:
-    st.sidebar.caption("Se muestran las primeras 50 filas")
+    st.sidebar.caption("Se muestran primeras 50 y últimas 10 filas")
 j_min = st.sidebar.number_input("Minuto inicio visualizacion j", min_value=0, value=0, step=1)
 seed_input = st.sidebar.text_input("Semilla opcional", value="")
 
@@ -1061,24 +1061,36 @@ if st.session_state.sim_ran:
     rows_desde_j = [r for r in rows if (r["ctrl_reloj"] or 0) >= j]
     total_filas = len(rows_desde_j)
 
-    # Paginación
-    if mostrar_todas:
+    # Vista comprimida: primeras 50 + últimas 10 con índices reales
+    if mostrar_todas or total_filas <= 60:
         rows_filtradas = rows_desde_j
     else:
-        rows_filtradas = rows_desde_j[:50]
-        if rows and rows[-1] not in rows_filtradas:
-            rows_filtradas = rows_filtradas + [rows[-1]]
+        primeras = list(enumerate(rows_desde_j))[:50]
+        ultimas = list(enumerate(rows_desde_j))[-10:]
+        seen_ids = set()
+        rows_filtradas = []
+        indices = []
+        for idx, r in primeras:
+            indices.append(idx)
+            rows_filtradas.append(r)
+            seen_ids.add(id(r))
+        for idx, r in ultimas:
+            if id(r) not in seen_ids:
+                indices.append(idx)
+                rows_filtradas.append(r)
 
     puestos = int(puestos_documentales)
     fosas_n = int(cantidad_fosas)
 
     df_filtrado = build_multiindex_df(rows_filtradas, tipos_clientes, puestos, fosas_n)
+    if not mostrar_todas and total_filas > 60:
+        df_filtrado.index = indices
 
     st.subheader("Vector de estado")
     if mostrar_todas:
         st.caption("Se muestran todas las filas desde j. La última fila siempre se incluye.")
     else:
-        st.caption("Se muestran las primeras 50 filas desde j y siempre se agrega la ultima fila de simulacion si no estaba incluida.")
+        st.caption(f"Se muestran las primeras 50 y últimas 10 filas desde j (total: {total_filas}).")
     _mostrar_df_estilado(aplicar_estilos_vector(df_filtrado, tipos_clientes), height=650)
     col_f, col_l = st.columns([1, 4])
     col_f.markdown(f"**Filas totales:** {total_filas}")
