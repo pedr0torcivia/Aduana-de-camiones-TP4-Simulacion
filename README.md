@@ -237,4 +237,62 @@ Actualmente se recomienda utilizar la versión corregida, ya que representa mejo
 
 Este proyecto fue desarrollado como parte de un trabajo práctico de la materia **Simulación**, con el objetivo de aplicar conceptos de simulación por eventos discretos, variables aleatorias, colas, servidores, acumuladores y análisis de métricas de desempeño.
 
-El caso de estudio corresponde a una aduana de camiones, donde se busca analizar el comportamiento del sistema ante diferentes configuraciones de recursos, prioridades, tiempos de atención y ventanas operativas.
+---
+
+### Enunciado: Aduana de Camiones
+
+La aduana fronteriza procesa el ingreso de camiones en una ventana operativa de **07:00 a 19:00 horas**. Al cierre, los camiones que ya están en la fila de control documental son procesados, pero se rechaza cualquier llegada posterior.
+
+Arriban dos tipos de cargas:
+
+- **Carga General (CCG):** frecuencia exponencial negativa con media de 15 minutos.
+- **Carga Perecedera (CCP):** frecuencia exponencial negativa con media de 40 minutos.
+
+El control consta de dos etapas:
+
+**Control Documental**
+- Hay tres puestos de atención.
+- Los camiones con carga perecedera tienen prioridad absoluta en la fila.
+- El tiempo de revisión es uniforme entre 10 y 15 minutos.
+
+**Revisión Física**
+- Al finalizar el control documental, el 15% de todos los camiones es derivado a una fosa de inspección profunda (un solo servidor).
+- Demora entre 30 y 60 minutos con distribución uniforme.
+- En esta instancia no existen prioridades por tipo de carga.
+
+**Objetivos de la simulación:**
+
+- Tiempo de espera promedio diferenciado para camiones de carga general y perecedera en el control documental.
+- Porcentaje de utilización del puesto de revisión física.
+- Cantidad máxima de camiones que se acumularon simultáneamente en el recinto aduanero.
+
+---
+
+### Consignas de la actividad
+
+#### Parte A — Análisis y definición del sistema
+
+Entregar un documento con el análisis y las definiciones del sistema que incluya:
+
+- **Identificación de objetos:** nombre, características, atributos (nombre, estado y resto de atributos necesarios, cada uno con sus valores posibles).
+- **Determinación de eventos.**
+- **Colas existentes en el sistema** y características.
+- **Variables aleatorias del sistema:** indicar la fórmula que se utiliza para generar valores para cada variable, reemplazando la fórmula teórica por la que corresponda en cada caso.
+
+#### Parte B — Desarrollo del aplicativo
+
+Desarrollar un aplicativo que efectúe la simulación del sistema con las siguientes pautas:
+
+- Se deberá simular **X tiempo** (parámetro solicitado al inicio) generando **N cantidad de iteraciones** en total. El aplicativo debe permitir simular hasta 100000 iteraciones del vector de estado o hasta el tiempo X, lo que ocurra primero.
+- Se deberá mostrar en el vector de estado **i iteraciones a partir de una hora j** (valores i y j ingresados por parámetro).
+- Se deberá mostrar en el vector de estado la **última fila de simulación**, es decir la fila correspondiente al instante X. En esta fila no es necesario mostrar los objetos temporales.
+- Todos los valores en rojo deben ser parametrizables.
+- El vector de estado debe mostrar como mínimo:
+  - hora simulada;
+  - nombre del evento simulado;
+  - próximos eventos a ejecutarse;
+  - objetos considerados en la simulación, cada uno con sus atributos (nombre, estado y otros atributos necesarios);
+  - variables auxiliares (acumuladores, contadores, etc.).
+- Para cada variable aleatoria de la simulación se debe mostrar el **número aleatorio** que se usó para determinar su valor.
+- El vector de estado debe permitir conocer, a partir de una hora j y durante i iteraciones, el valor de todos los atributos de los objetos presentes en el sistema en cualquier instante de ese intervalo. No es necesario mostrar los objetos que ya dejaron de existir en el sistema.
+- Plantear las **fórmulas necesarias** para responder lo que se desea averiguar con la simulación, y el resultado para la simulación efectuada.
