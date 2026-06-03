@@ -750,17 +750,8 @@ def _mostrar_df_estilado(styler, height: int = None):
 
     try:
         st.dataframe(styler, **kwargs)
-        return
     except Exception:
-        pass
-    try:
-        html = styler.to_html()
-        scroll = f"height:{height}px;overflow:auto;" if height else "overflow:auto;"
-        st.markdown(f'<div style="{scroll}">{html}</div>', unsafe_allow_html=True)
-        return
-    except Exception:
-        pass
-    st.dataframe(df, **kwargs)
+        st.dataframe(df, **kwargs)
 
 
 def aplicar_estilos_activos(df, tipos_clientes: list):
@@ -851,11 +842,23 @@ div.stButton > button:focus {
     unsafe_allow_html=True,
 )
 
+# ---------------------------------------------------------------------------
+# Estado de sesión (persistencia entre reruns)
+# ---------------------------------------------------------------------------
+if "sim_ran" not in st.session_state:
+    st.session_state.sim_ran = False
+if "filas_visibles" not in st.session_state:
+    st.session_state.filas_visibles = 50
+for k in ("rows", "acum_espera", "cont_doc", "acum_fosa", "max_cam", "acum_tiempo_activo"):
+    if k not in st.session_state:
+        st.session_state[k] = None
+
 st.sidebar.header("Parametros de simulacion")
 
 N = st.sidebar.number_input("Iteraciones maximas N", min_value=1, value=10000, step=1)
 mostrar_todas = st.sidebar.checkbox("Mostrar todas las filas", value=False)
-i_rows = None if mostrar_todas else st.sidebar.number_input("Filas a mostrar i", min_value=1, value=50, step=1)
+if not mostrar_todas:
+    st.sidebar.caption("Se muestran las primeras 50 filas")
 j_min = st.sidebar.number_input("Minuto inicio visualizacion j", min_value=0, value=0, step=1)
 seed_input = st.sidebar.text_input("Semilla opcional", value="")
 
@@ -938,8 +941,6 @@ if ventana_inicio < ventana_fin:
 errores = []
 if N <= 0:
     errores.append("N debe ser mayor a 0.")
-if i_rows is not None and i_rows <= 0:
-    errores.append("i debe ser mayor a 0.")
 if j_min < 0:
     errores.append("j debe ser mayor o igual a 0.")
 if doc_max < doc_min:
@@ -984,6 +985,26 @@ if st.button("Simular", use_container_width=True) and not errores:
             puestos_documentales=int(puestos_documentales),
             cantidad_fosas=int(cantidad_fosas),
         )
+
+    st.session_state.rows = rows
+    st.session_state.acum_espera = acum_espera
+    st.session_state.cont_doc = cont_doc
+    st.session_state.acum_fosa = acum_fosa
+    st.session_state.max_cam = max_cam
+    st.session_state.acum_tiempo_activo = acum_tiempo_activo
+    st.session_state.sim_ran = True
+    st.session_state.filas_visibles = 50
+
+# ---------------------------------------------------------------------------
+# Visualización de resultados (persistida en session_state)
+# ---------------------------------------------------------------------------
+if st.session_state.sim_ran:
+    rows = st.session_state.rows
+    acum_espera = st.session_state.acum_espera
+    cont_doc = st.session_state.cont_doc
+    acum_fosa = st.session_state.acum_fosa
+    max_cam = st.session_state.max_cam
+    acum_tiempo_activo = st.session_state.acum_tiempo_activo
 
     ultimo_evento = rows[-1]["ctrl_evento"] if rows else ""
     corte_por_n = ultimo_evento == "Corte por limite de iteraciones"
@@ -1035,31 +1056,34 @@ if st.button("Simular", use_container_width=True) and not errores:
         lineas.append(f"- Maximo camiones simultaneos = max(Cont Camiones en sistema) = {max_cam}")
         st.markdown("\n".join(lineas))
 
-    # Filtrar rows antes de construir el DataFrame para no materializar toda la tabla
+    # Filtrar rows desde el minuto j
     j = float(j_min)
     rows_desde_j = [r for r in rows if (r["ctrl_reloj"] or 0) >= j]
-    rows_filtradas = rows_desde_j if mostrar_todas else rows_desde_j[:int(i_rows)]
+    total_filas = len(rows_desde_j)
 
-    # Garantizar que la última fila siempre esté incluida
-    if rows and rows[-1] not in rows_filtradas:
-        rows_filtradas = rows_filtradas + [rows[-1]]
+    # Paginación
+    if mostrar_todas:
+        rows_filtradas = rows_desde_j
+    else:
+        rows_filtradas = rows_desde_j[:50]
+        if rows and rows[-1] not in rows_filtradas:
+            rows_filtradas = rows_filtradas + [rows[-1]]
 
     puestos = int(puestos_documentales)
     fosas_n = int(cantidad_fosas)
 
     df_filtrado = build_multiindex_df(rows_filtradas, tipos_clientes, puestos, fosas_n)
-    df_ultima = build_multiindex_df([rows[-1]], tipos_clientes, puestos, fosas_n) if rows else df_filtrado.tail(1)
 
     st.subheader("Vector de estado")
     if mostrar_todas:
         st.caption("Se muestran todas las filas desde j. La última fila siempre se incluye.")
     else:
-        st.caption("Se muestran las primeras i filas desde j y siempre se agrega la ultima fila de simulacion si no estaba incluida.")
-    renderizar_leyenda(tipos_clientes)
+        st.caption("Se muestran las primeras 50 filas desde j y siempre se agrega la ultima fila de simulacion si no estaba incluida.")
     _mostrar_df_estilado(aplicar_estilos_vector(df_filtrado, tipos_clientes), height=650)
-
-    st.subheader("Ultima fila de simulacion")
-    _mostrar_df_estilado(aplicar_estilos_vector(df_ultima, tipos_clientes), height=170)
+    col_f, col_l = st.columns([1, 4])
+    col_f.markdown(f"**Filas totales:** {total_filas}")
+    with col_l:
+        renderizar_leyenda(tipos_clientes)
 
     # ---- Gráficos de análisis ----
     st.subheader("Gráficos de análisis")
