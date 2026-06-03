@@ -868,12 +868,12 @@ for idx in range(1, int(cantidad_tipos) + 1):
         codigo_default = "CCG"
         nombre_default = "Camión con Carga general"
         media_default = 15.0
-        prioridad_default = 2
+        prioridad_default = 1
     elif idx == 2:
         codigo_default = "CCP"
         nombre_default = "Camión con Carga perecedera"
         media_default = 40.0
-        prioridad_default = 1
+        prioridad_default = 2
     else:
         codigo_default = f"C{idx}"
         nombre_default = f"Cliente {idx}"
