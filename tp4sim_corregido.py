@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 import pandas as pd
+import numpy as np
 
 # Permitir Styler en tablas grandes
 pd.set_option("styler.render.max_elements", 2_000_000)
@@ -708,30 +709,31 @@ def _bg_evento(evento: str, colores: dict) -> str:
 
 
 def aplicar_estilos_vector(df, tipos_clientes: list):
-    """Colorea cada fila del vector de estado según el tipo de evento."""
+    """Colorea solo la celda Evento de cada fila según el tipo de evento."""
     colores = _colores_tipo(tipos_clientes)
     evento_col = ("Control", "Evento")
 
-    def color_fila(row):
-        evento = str(row.get(evento_col, "") or "")
-        bg = _bg_evento(evento, colores)
-        estilo = f"background-color: {bg}; color: #1e293b" if bg else ""
-        return [estilo] * len(row)
+    def fmt(val):
+        bg = _bg_evento(str(val or ""), colores)
+        return f"background-color: {bg}; color: #1e293b" if bg else ""
 
-    return df.style.apply(color_fila, axis=1)
+    # map() en pandas >= 2.1, applymap() en versiones anteriores
+    styler = df.style
+    try:
+        return styler.map(fmt, subset=[evento_col])
+    except AttributeError:
+        return styler.applymap(fmt, subset=[evento_col])
 
 
 def aplicar_estilos_activos(df, tipos_clientes: list):
     """Colorea la tabla de camiones activos por tipo."""
     colores = _colores_tipo(tipos_clientes)
 
-    def color_fila(row):
-        tipo = str(row.get("Tipo", "") or "")
-        bg = colores.get(tipo, (None, None))[1]
-        estilo = f"background-color: {bg}; color: #1e293b" if bg else ""
-        return [estilo] * len(row)
+    bgs = df["Tipo"].fillna("").astype(str).map(lambda t: colores.get(t, (None, None))[1] or "")
+    estilos_fila = bgs.map(lambda bg: f"background-color: {bg}; color: #1e293b" if bg else "")
+    estilos = _estilos_df(df, estilos_fila)
 
-    return df.style.apply(color_fila, axis=1)
+    return df.style.apply(lambda _: estilos, axis=None)
 
 
 def renderizar_leyenda(tipos_clientes: list):
