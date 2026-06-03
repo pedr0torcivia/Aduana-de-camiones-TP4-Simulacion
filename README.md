@@ -1,48 +1,160 @@
 # Simulación de Aduana de Camiones
 
-Aplicación desarrollada en **Python** con **Streamlit** para simular el ingreso y procesamiento de camiones en una aduana fronteriza mediante un modelo de **simulación por eventos discretos**.
+Aplicación desarrollada en **Python** con **Streamlit** para simular el ingreso, procesamiento y egreso de camiones en una aduana fronteriza mediante un modelo de **simulación por eventos discretos**.
 
-El sistema contempla camiones con **carga general** y **carga perecedera**, control documental con prioridad para perecederos, revisión física aleatoria y cálculo de métricas operativas del sistema.
+La versión principal del proyecto es el archivo:
+
+```bash
+tp4sim_corregido.py
+```
+
+Este archivo contiene la simulación corregida, donde se modela de forma más realista el funcionamiento de la aduana: apertura diaria, cierre de ventana operativa, continuidad de atención para los camiones que ya ingresaron, cálculo de tiempo activo y métricas finales del sistema.
 
 ---
 
 ## Descripción del proyecto
 
-Este proyecto simula el funcionamiento de una aduana de camiones que opera durante una ventana horaria determinada.
+El sistema representa una aduana de camiones que opera durante una ventana horaria definida por el usuario. Durante ese período pueden ingresar camiones al sistema. Una vez cerrada la ventana, ya no se permiten nuevas llegadas, pero los camiones que quedaron dentro continúan siendo atendidos hasta que el sistema queda vacío.
 
-Los camiones ingresan al sistema según distribuciones de probabilidad, esperan para ser atendidos en el control documental y, luego de finalizar esa etapa, pueden ser derivados a una revisión física. La simulación permite observar la evolución del sistema mediante un vector de estado y obtener indicadores de desempeño.
+Los camiones ingresan según distribuciones de probabilidad, esperan para ser atendidos en el control documental y, luego de finalizar esa etapa, pueden ser derivados aleatoriamente a una revisión física. La simulación permite observar la evolución del sistema mediante un vector de estado, gráficos de análisis y métricas operativas.
 
 ---
 
-## Características principales
+## Versión corregida
 
-- Simulación de llegadas de camiones con distribución exponencial negativa.
-- Diferenciación entre camiones de carga general y carga perecedera.
+La versión corregida mejora la lógica temporal de la simulación. En lugar de finalizar simplemente al llegar a un tiempo fijo X, el programa trabaja con días de operación, ventanas horarias y cierre real del sistema.
+
+Esto permite representar mejor el funcionamiento de una aduana real:
+
+- la aduana abre en un horario determinado;
+- durante la ventana operativa ingresan camiones;
+- al cerrar la ventana, dejan de generarse nuevas llegadas;
+- los camiones que ya ingresaron siguen siendo atendidos (overtime);
+- la simulación finaliza cuando se cumple la cantidad de días definida y el sistema queda vacío.
+
+### Características principales
+
+- Simulación por eventos discretos.
+- Llegadas de camiones con distribución exponencial negativa.
+- Tiempos de atención documental y física con distribución uniforme.
+- Diferenciación entre camiones de carga general (CCG) y carga perecedera (CCP).
 - Prioridad para camiones con carga perecedera en el control documental.
-- Tres puestos de atención para el control documental.
-- Revisión física con un único puesto de inspección.
-- Derivación aleatoria de camiones a revisión física.
-- Registro del vector de estado de la simulación.
+- Cantidad parametrizable de tipos de camiones.
+- Cantidad parametrizable de puestos documentales.
+- Cantidad parametrizable de fosas de revisión física.
+- Definición de inicio y fin de ventana operativa diaria (en minutos del día, 0–1440).
+- Simulación de uno o varios días consecutivos.
+- Cierre de ventana sin eliminar camiones ya ingresados.
+- Atención de camiones pendientes luego del cierre (overtime).
+- Cálculo de tiempo activo del sistema (ventana operativa efectiva + overtime, sin contar noches ociosas).
+- Cálculo de utilización de fosa sobre tiempo activo real.
+- Registro completo del vector de estado con MultiIndex.
 - Visualización de números aleatorios utilizados.
-- Cálculo de métricas finales del sistema.
-- Exportación del vector de estado en formato CSV.
+- Colores en el vector de estado según tipo de evento y tipo de camión.
+- Leyenda visual para interpretar los eventos.
+- Gráficos de evolución del sistema (camiones en sistema, colas documentales, cola de fosa).
+- Opción para mostrar todas las filas o solo una parte del vector.
+- Filtro por minuto de inicio de visualización.
 
----
+### Eventos modelados
 
-## Métricas obtenidas
+La simulación trabaja avanzando de evento en evento. Los principales eventos son:
 
-La aplicación permite calcular:
+- Inicio de simulación.
+- Apertura de día.
+- Llegada de camión con carga general.
+- Llegada de camión con carga perecedera.
+- Fin de revisión documental.
+- Fin de revisión física.
+- Cierre de ventana operativa.
+- Fin de simulación.
+- Corte por límite de iteraciones.
 
-- Tiempo de espera promedio de camiones con carga general en el control documental.
-- Tiempo de espera promedio de camiones con carga perecedera en el control documental.
-- Porcentaje de utilización del puesto de revisión física.
-- Cantidad máxima de camiones acumulados simultáneamente en el recinto aduanero.
-- Cantidad total de camiones ingresados por tipo de carga.
-- Cantidad total de iteraciones simuladas.
+El reloj de simulación no avanza minuto por minuto, sino que salta directamente al próximo evento más cercano.
 
----
+### Objetos del sistema
 
-## Tecnologías utilizadas
+#### Camiones
+
+Los camiones son objetos temporales: ingresan al sistema, cambian de estado y luego salen.
+
+Cada camión registra:
+
+- ID del camión.
+- Tipo de carga.
+- Hora de llegada.
+- Hora de inicio de atención documental.
+- Estado actual.
+
+Estados posibles:
+
+| Estado | Descripción |
+|---|---|
+| En cola documental | Esperando puesto libre |
+| En revisión documental | Siendo atendido en un puesto |
+| En cola física | Esperando fosa libre |
+| En revisión física | Siendo inspeccionado en una fosa |
+| Destruido | Ya salió del sistema |
+
+#### Puestos documentales
+
+Los puestos documentales son recursos permanentes del sistema. Cada puesto puede estar libre u ocupado, y registra el camión asignado y la hora de fin de atención.
+
+#### Fosas de revisión física
+
+Las fosas también son recursos permanentes. Se utilizan cuando un camión es derivado a revisión física. Registran la hora de inicio y fin de ocupación para el cálculo de utilización.
+
+### Métricas obtenidas
+
+| Métrica | Fórmula |
+|---|---|
+| Espera promedio por tipo | ACU espera / cantidad atendida documentalmente |
+| Utilización de fosa | ACU tiempo ocupado / ACU tiempo activo × 100 |
+| Máximo de camiones simultáneos | Mayor valor registrado en el contador de camiones en sistema |
+
+El denominador de utilización es el **tiempo activo** (suma de ventanas operativas efectivas más overtime de cada día), excluyendo los períodos nocturnos ociosos entre días.
+
+### Vector de estado
+
+El vector de estado muestra una fila por cada evento procesado. Entre los datos mostrados se incluyen:
+
+- Evento actual y próximo evento.
+- Reloj de simulación.
+- Números aleatorios utilizados.
+- Próximas llegadas por tipo.
+- Colas documentales por tipo.
+- Estado, demoras y fins de los puestos documentales.
+- Decisión y cola de revisión física.
+- Estado, demoras y fins de las fosas.
+- Acumuladores y contadores del sistema.
+- Camiones activos en el sistema.
+
+### Gráficos de análisis
+
+Al finalizar la simulación se generan tres gráficos de línea:
+
+1. **Camiones en sistema**: evolución de la cantidad de camiones simultáneos. Permite detectar congestión y el pico máximo.
+2. **Colas documentales**: evolución de las colas por tipo de camión. Permite verificar el efecto de la prioridad CCP sobre CCG.
+3. **Cola de fosa**: evolución de la cola de revisión física. Permite detectar si la fosa es el cuello de botella del sistema.
+
+### Parametrización
+
+Desde la barra lateral de Streamlit el usuario puede configurar:
+
+- Cantidad máxima de iteraciones (N).
+- Semilla aleatoria (opcional).
+- Cantidad de tipos de clientes y sus parámetros (código, nombre, media de llegada, prioridad documental).
+- Cantidad de puestos documentales.
+- Tiempos mínimo y máximo de revisión documental.
+- Cantidad de fosas de revisión física.
+- Probabilidad de revisión física.
+- Tiempos mínimo y máximo de revisión física.
+- Cantidad de días a simular.
+- Inicio y fin de ventana operativa (minutos del día, 0–1440).
+- Cantidad de filas a mostrar en el vector (o mostrar todas).
+- Minuto desde el cual visualizar el vector.
+
+### Tecnologías utilizadas
 
 - Python
 - Streamlit
@@ -51,25 +163,73 @@ La aplicación permite calcular:
 - Random
 - Math
 
----
+### Instalación
 
-## Instalación
 Instalar las dependencias necesarias:
 
 ```bash
 pip install streamlit pandas
 ```
 
----
+### Ejecución de la versión corregida
 
-## Ejecución
-
-Para iniciar la aplicación, ejecutar:
+Para iniciar la versión corregida de la aplicación, ejecutar:
 
 ```bash
-python -m streamlit run tp4-sim.py```
+python -m streamlit run tp4sim_corregido.py
+```
 
 Luego de ejecutar el comando, Streamlit abrirá la aplicación en el navegador.
+
+---
+
+## Versión anterior
+
+El archivo antiguo del proyecto es:
+
+```bash
+tp4-sim.py
+```
+
+Esta versión contiene la primera implementación de la simulación. Modela las llegadas, colas, atención documental, revisión física y métricas principales, pero trabaja con una **lógica de tiempo total fijo**: la simulación avanza hasta un tiempo X definido por el usuario y luego se detiene, sin contemplar apertura y cierre de ventana como eventos diferenciados.
+
+La versión anterior puede ejecutarse con:
+
+```bash
+python -m streamlit run tp4-sim.py
+```
+
+Actualmente se recomienda utilizar la versión corregida, ya que representa mejor el cierre de ventana operativa, la atención de camiones pendientes y el cálculo de utilización sobre tiempo activo real.
+
+### Diferencias respecto a la versión corregida
+
+| Aspecto | Versión anterior (`tp4-sim.py`) | Versión corregida (`tp4sim_corregido.py`) |
+|---|---|---|
+| Criterio de parada | Tiempo total fijo X | Sistema vacío después del último cierre |
+| Ventana operativa | Solo cierre (`ventana_fin`) | Inicio y fin parametrizables por día |
+| Multi-día | No | Sí, con cantidad de días parametrizable |
+| Llegadas iniciales | Se generan desde el minuto 0 | Se generan al abrir la ventana (evento Apertura) |
+| Denominador de métricas | Tiempo total simulado (incluye noches) | Tiempo activo real (ventana + overtime) |
+| Colores en vector | No | Sí, por tipo de evento y tipo de camión |
+| Gráficos | No | Sí (3 gráficos de evolución) |
+| Mostrar todas las filas | No | Sí |
+| Sección camiones activos | Sí | Eliminada |
+| Exportación CSV | Sí | Eliminada |
+
+### Características de la versión anterior
+
+- Simulación por eventos discretos con tiempo total fijo X.
+- Llegadas de camiones con distribución exponencial negativa desde el minuto 0.
+- Tiempos de atención con distribución uniforme.
+- Dos tipos de camiones parametrizables: carga general (CCG) y carga perecedera (CCP).
+- Prioridad para CCP en el control documental.
+- Puestos documentales y fosas parametrizables.
+- Derivación aleatoria de camiones a revisión física.
+- Registro del vector de estado.
+- Visualización de números aleatorios.
+- Cálculo de métricas finales con denominador de tiempo total.
+- Sección de camiones activos al finalizar.
+- Exportación del vector de estado en formato CSV.
 
 ---
 
@@ -77,4 +237,4 @@ Luego de ejecutar el comando, Streamlit abrirá la aplicación en el navegador.
 
 Este proyecto fue desarrollado como parte de un trabajo práctico de la materia **Simulación**, con el objetivo de aplicar conceptos de simulación por eventos discretos, variables aleatorias, colas, servidores, acumuladores y análisis de métricas de desempeño.
 
----
+El caso de estudio corresponde a una aduana de camiones, donde se busca analizar el comportamiento del sistema ante diferentes configuraciones de recursos, prioridades, tiempos de atención y ventanas operativas.
