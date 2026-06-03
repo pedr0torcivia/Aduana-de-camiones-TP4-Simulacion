@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from typing import Optional
 import pandas as pd
 
+# Permitir Styler en tablas grandes
+pd.set_option("styler.render.max_elements", 2_000_000)
+
 st.set_page_config(
     page_title="Simulación: Aduana de Camiones",
     layout="wide",
@@ -53,7 +56,7 @@ def exp_neg(media: float, rnd: float) -> float:
 def uniforme(minv: float, maxv: float, rnd: float) -> float:
     return minv + rnd * (maxv - minv)
 
-#Redondeo de decimales
+
 def fmt(x):
     if x is None:
         return None
@@ -61,7 +64,7 @@ def fmt(x):
         return round(x, 4)
     return x
 
-#Según el tipo de camión, determinamos si es CCG o CCP o Generico si el usuario agrega más tipos, para mostrarlo en el vector de estado.
+
 def nombre_grupo_llegada(tipo: dict) -> str:
     codigo = tipo["codigo"]
     if codigo == "CCG":
@@ -69,6 +72,12 @@ def nombre_grupo_llegada(tipo: dict) -> str:
     if codigo == "CCP":
         return "Llegada de Camión con Carga perecedera"
     return f"Llegada de {tipo['nombre']}"
+
+
+def min_a_hhmm(minutos: float) -> str:
+    h = int(minutos) // 60
+    m = int(minutos) % 60
+    return f"{h:02d}:{m:02d}"
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +149,7 @@ def construir_columnas(tipos_clientes: list, puestos_documentales: int, cantidad
             add("Columnas auxiliares", f"Hora fin ocupacion fosa {i}", f"aux_h_fin_fosa_{i}")
 
     add("Columnas auxiliares", "ACU tiempo ocupacion fosa", "aux_acu_fosa")
+    add("Columnas auxiliares", "ACU tiempo activo", "aux_acu_tiempo_activo")
 
     for tipo in tipos_clientes:
         add("Columnas auxiliares", f"ACU de espera {tipo['codigo']}", f"aux_acu_espera_{tipo['id']}")
@@ -180,7 +190,6 @@ def build_multiindex_df(rows_internal: list, tipos_clientes: list, puestos_docum
 # ---------------------------------------------------------------------------
 
 def simular(
-    X: float,
     N: int,
     seed: Optional[int],
     tipos_clientes: list,
@@ -189,7 +198,9 @@ def simular(
     prob_fisica: float,
     fis_min: float,
     fis_max: float,
+    ventana_inicio: float,
     ventana_fin: float,
+    cantidad_dias: int,
     puestos_documentales: int,
     cantidad_fosas: int,
 ):
@@ -208,12 +219,41 @@ def simular(
     fosas = [Fosa(id=i + 1, estado="Libre") for i in range(cantidad_fosas)]
 
     prox_llegadas = {tipo["id"]: None for tipo in tipos_clientes}
-    ventana_cerrada = False
+
+    # Duración fija de la ventana operativa (en minutos)
+    duracion_ventana = ventana_fin - ventana_inicio
+
+    # Tiempos de apertura y cierre se programan dinámicamente:
+    # - El siguiente día se programa recién cuando el día anterior termina de procesarse.
+    # - Si el día anterior se extiende más allá de la apertura programada del siguiente día,
+    #   la apertura real se desplaza al momento en que el sistema queda vacío.
+    aperturas_reales = []   # tiempos absolutos de apertura ya programados
+    cierres_reales = []     # tiempos absolutos de cierre ya programados
+
+    def programar_proximo_dia(reloj_actual: float):
+        d = len(aperturas_reales)  # índice del próximo día (base 0)
+        if d >= cantidad_dias:
+            return
+        apertura_calendario = d * 1440 + ventana_inicio
+        apertura_efectiva = max(apertura_calendario, reloj_actual)
+        aperturas_reales.append(apertura_efectiva)
+        cierres_reales.append(apertura_efectiva + duracion_ventana)
+
+    programar_proximo_dia(0.0)  # Programar día 1
+
+    ventana_abierta = False
+    current_day_cierre_fired = False   # el cierre del día actual ya se disparó
+    ultimo_cierre_fired = False        # fue el cierre del último día
+    next_apertura_idx = 0              # índice del próximo evento "Apertura" a disparar
+    next_cierre_idx = 0                # índice del próximo evento "Cierre" a disparar
+    cierre_actual = None               # tiempo absoluto del cierre del día en curso
+    t_apertura_actual = None           # momento en que abrió la ventana del día actual
     final_corte_guardado = False
 
     acum_espera = {tipo["id"]: 0.0 for tipo in tipos_clientes}
     cont_doc = {tipo["id"]: 0 for tipo in tipos_clientes}
     acum_ocup_fosa = 0.0
+    acum_tiempo_activo = 0.0           # denominador de métricas (ventana + overtime)
     camiones_sistema = 0
     max_camiones = 0
 
@@ -221,10 +261,15 @@ def simular(
     tipos_por_id = {tipo["id"]: tipo for tipo in tipos_clientes}
     orden_prioridad = sorted(tipos_clientes, key=lambda t: (t["prioridad"], t["id"]))
 
-    def nombre_tipo(tid: int) -> str:
-        return tipos_por_id[tid]["codigo"]
+    def sistema_vacio() -> bool:
+        return (
+            camiones_sistema == 0
+            and all(len(q) == 0 for q in colas_doc.values())
+            and len(cola_fisica) == 0
+            and all(s.estado == "Libre" for s in servidores)
+            and all(f.estado == "Libre" for f in fosas)
+        )
 
-#Mira todos los eventos futuros y devuelve del mas proximo para el vector estado
     def nombre_prox_evento():
         candidatos = []
         for tipo in tipos_clientes:
@@ -237,14 +282,14 @@ def simular(
         for fosa in fosas:
             if fosa.fin is not None:
                 candidatos.append((f"Fin Revision Fisica F{fosa.id}", fosa.fin))
-        if not ventana_cerrada:
-            candidatos.append(("Cierre ventana", ventana_fin))
-        candidatos.append(("Fin simulacion", X))
+        if next_apertura_idx < len(aperturas_reales):
+            candidatos.append((f"Apertura dia {next_apertura_idx + 1}", aperturas_reales[next_apertura_idx]))
+        if ventana_abierta and next_cierre_idx < len(cierres_reales):
+            candidatos.append((f"Cierre ventana dia {next_cierre_idx + 1}", cierres_reales[next_cierre_idx]))
         if not candidatos:
-            return None
+            return "Fin simulacion"
         return min(candidatos, key=lambda x: x[1])[0]
 
-#"Fotografía" del sistema en ese instante y lo agg a las filas
     def guardar_fila(
         evento,
         rnd_lleg_dict=None,
@@ -276,6 +321,7 @@ def simular(
             "fis_situacion": situacion,
             "fos_cola": len(cola_fisica),
             "aux_acu_fosa": fmt(acum_ocup_fosa),
+            "aux_acu_tiempo_activo": fmt(acum_tiempo_activo),
             "aux_cam_sistema": camiones_sistema,
             "aux_max_cam": max_camiones,
         }
@@ -315,30 +361,27 @@ def simular(
         rows.append(row)
         iteracion += 1
 
-# Al cortar la simulación antes de llegar a X, se debe guardar una fila final con el evento de corte real y el reloj ajustado a ese instante.
     def guardar_fila_final_corte(tiempo_corte: Optional[float] = None, evento_final: str = "Fin simulacion"):
-        nonlocal reloj, acum_ocup_fosa, final_corte_guardado
+        nonlocal reloj, acum_ocup_fosa, final_corte_guardado, acum_tiempo_activo
         if final_corte_guardado:
             return
 
         if tiempo_corte is None:
-            tiempo_corte = float(X)
-
+            tiempo_corte = reloj
         tiempo_corte = float(tiempo_corte)
         reloj = tiempo_corte
 
-        # Al cortar la simulación se debe sumar solamente el tramo ocupado
-        # desde el inicio de ocupación hasta el instante real de corte.
-        # Si N corta antes que X, NO corresponde saltar hasta X.
         for fosa in fosas:
             if fosa.estado == "Ocupado" and fosa.inicio_ocupacion is not None:
-                tiempo_ocupado_pendiente = max(0.0, tiempo_corte - fosa.inicio_ocupacion)
-                acum_ocup_fosa += tiempo_ocupado_pendiente
+                acum_ocup_fosa += max(0.0, tiempo_corte - fosa.inicio_ocupacion)
+
+        # Si el corte ocurre en medio de un día activo, sumar el tramo parcial
+        if t_apertura_actual is not None:
+            acum_tiempo_activo += max(0.0, tiempo_corte - t_apertura_actual)
 
         guardar_fila(evento_final, mostrar_temporales=False)
         final_corte_guardado = True
 
-#Busca servidores libres y les asigna el proximo camion de la cola documental siguiendo el orden de prioridad, actualiza las métricas de espera y devuelve los rnd y demoras para mostrar en el vector de estado.
     def asignar_documentales():
         nonlocal acum_espera, cont_doc
 
@@ -379,7 +422,6 @@ def simular(
 
         return rnd_doc_dict, dem_doc_dict
 
-#Busca servidores de fosa libres y les asigna el proximo camion 
     def iniciar_fisica():
         rnd_fis_dict = {}
         dem_fis_dict = {}
@@ -408,8 +450,6 @@ def simular(
 
         return rnd_fis_dict, dem_fis_dict
 
-# Revisa todos los eventos futuros (llegadas, fines documentales, fines físicos, cierre de ventana, fin de simulación) 
-# y devuelve una lista de candidatos con su tiempo de ocurrencia para determinar el próximo evento a procesar.
     def candidatos_evento():
         candidatos = []
         for tipo in tipos_clientes:
@@ -422,38 +462,59 @@ def simular(
         for fosa in fosas:
             if fosa.fin is not None:
                 candidatos.append((f"Fin Revision Fisica F{fosa.id}", fosa.fin, fosa.id))
-        if not ventana_cerrada:
-            candidatos.append(("Cierre ventana", ventana_fin, None))
-        candidatos.append(("Fin simulacion", X, None))
+        # Próxima apertura (sólo si ya fue programada, es decir, el día anterior cerró)
+        if next_apertura_idx < len(aperturas_reales):
+            candidatos.append((
+                f"Apertura dia {next_apertura_idx + 1}",
+                aperturas_reales[next_apertura_idx],
+                next_apertura_idx,
+            ))
+        # Próximo cierre (sólo mientras la ventana esté abierta)
+        if ventana_abierta and next_cierre_idx < len(cierres_reales):
+            candidatos.append((
+                f"Cierre ventana dia {next_cierre_idx + 1}",
+                cierres_reales[next_cierre_idx],
+                next_cierre_idx,
+            ))
         return candidatos
 
-    # Inicializar próximas llegadas
-    rnd_lleg_inicial = {}
-    dem_lleg_inicial = {}
-    for tipo in tipos_clientes:
-        tid = tipo["id"]
-        rnd = random.random()
-        demora = exp_neg(tipo["media"], rnd)
-        prox_llegadas[tid] = demora if demora <= ventana_fin else None
-        rnd_lleg_inicial[tid] = rnd
-        dem_lleg_inicial[tid] = demora
-
-    guardar_fila("Inicio", rnd_lleg_dict=rnd_lleg_inicial, dem_lleg_dict=dem_lleg_inicial)
+    # Fila inicial (sin llegadas — se generan al abrir la primera ventana)
+    guardar_fila("Inicio")
 
     while iteracion < N:
         candidatos = candidatos_evento()
         if not candidatos:
+            if not final_corte_guardado:
+                guardar_fila_final_corte(reloj, "Fin simulacion")
             break
 
         evento, tiempo_evento, referencia = min(candidatos, key=lambda x: x[1])
-
-        if tiempo_evento > X:
-            guardar_fila_final_corte(float(X), "Fin simulacion")
-            break
-
         reloj = tiempo_evento
 
-        if evento.startswith("Llegada"):
+        # ------------------------------------------------------------------ #
+        if evento.startswith("Apertura"):
+            day_idx = referencia
+            ventana_abierta = True
+            current_day_cierre_fired = False
+            next_apertura_idx = day_idx + 1
+            t_apertura_actual = reloj
+            cierre_actual = cierres_reales[day_idx]
+
+            rnd_lleg_dict = {}
+            dem_lleg_dict = {}
+            for tipo in tipos_clientes:
+                tid = tipo["id"]
+                rnd = random.random()
+                dem = exp_neg(tipo["media"], rnd)
+                nueva_llegada = reloj + dem
+                prox_llegadas[tid] = nueva_llegada if nueva_llegada <= cierre_actual else None
+                rnd_lleg_dict[tid] = rnd
+                dem_lleg_dict[tid] = dem
+
+            guardar_fila(evento, rnd_lleg_dict=rnd_lleg_dict, dem_lleg_dict=dem_lleg_dict)
+
+        # ------------------------------------------------------------------ #
+        elif evento.startswith("Llegada"):
             tid = referencia
             tipo = tipos_por_id[tid]
 
@@ -474,7 +535,11 @@ def simular(
             rnd_l = random.random()
             dem_l = exp_neg(tipo["media"], rnd_l)
             nueva_llegada = reloj + dem_l
-            prox_llegadas[tid] = nueva_llegada if nueva_llegada <= ventana_fin and not ventana_cerrada else None
+            prox_llegadas[tid] = (
+                nueva_llegada
+                if ventana_abierta and cierre_actual is not None and nueva_llegada <= cierre_actual
+                else None
+            )
 
             rnd_doc_d, dem_doc_d = asignar_documentales()
             guardar_fila(
@@ -485,6 +550,7 @@ def simular(
                 dem_doc_dict=dem_doc_d,
             )
 
+        # ------------------------------------------------------------------ #
         elif evento.startswith("Fin Doc P"):
             sid = referencia
             serv = servidores[sid - 1]
@@ -520,6 +586,7 @@ def simular(
                 dem_doc_dict=dem_doc_d,
             )
 
+        # ------------------------------------------------------------------ #
         elif evento.startswith("Fin Revision Fisica"):
             fosa_id = referencia
             fosa = fosas[fosa_id - 1]
@@ -543,23 +610,37 @@ def simular(
                 fin_fosa_liberada_dict={fosa_id: fin_fosa},
             )
 
-        elif evento == "Cierre ventana":
-            ventana_cerrada = True
+        # ------------------------------------------------------------------ #
+        elif evento.startswith("Cierre ventana"):
+            day_idx = referencia
+            ventana_abierta = False
+            current_day_cierre_fired = True
+            next_cierre_idx = day_idx + 1
+            cierre_actual = None
+            if day_idx == cantidad_dias - 1:
+                ultimo_cierre_fired = True
             for tid in prox_llegadas:
                 prox_llegadas[tid] = None
-            guardar_fila("Cierre ventana")
+            guardar_fila(evento)
 
-        elif evento == "Fin simulacion":
-            guardar_fila_final_corte(float(X), "Fin simulacion")
-            break
+        # ------------------------------------------------------------------ #
+        # Verificar fin de día: si el cierre ya ocurrió y el sistema está vacío
+        if current_day_cierre_fired and sistema_vacio():
+            acum_tiempo_activo += reloj - t_apertura_actual
+            t_apertura_actual = None
+            current_day_cierre_fired = False
 
+            if ultimo_cierre_fired:
+                guardar_fila_final_corte(reloj, "Fin simulacion")
+                break
+            else:
+                # Programar el siguiente día (puede ser a partir de "reloj" si hay desborde)
+                programar_proximo_dia(reloj)
+                # El loop continúa; la próxima apertura ya está en candidatos
+
+    # Corte por límite de iteraciones
     if rows and not final_corte_guardado:
-        # Si se agotó N antes de llegar a X, el corte real es el reloj actual.
-        # Las métricas quedan parciales y no deben proyectarse hasta X.
-        if iteracion >= N and reloj < float(X):
-            guardar_fila_final_corte(reloj, "Corte por limite de iteraciones")
-        else:
-            guardar_fila_final_corte(float(X), "Fin simulacion")
+        guardar_fila_final_corte(reloj, "Corte por limite de iteraciones")
 
     return (
         rows,
@@ -568,6 +649,116 @@ def simular(
         cont_doc,
         acum_ocup_fosa,
         max_camiones,
+        acum_tiempo_activo,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ESTILOS / COLORES
+# ---------------------------------------------------------------------------
+
+# Paleta de fondos para tipos de camiones (bg_llegada, bg_camion)
+_PALETA_TIPOS = [
+    ("#dbeafe", "#bfdbfe"),  # azul
+    ("#fef3c7", "#fde68a"),  # ámbar
+    ("#dcfce7", "#bbf7d0"),  # verde
+    ("#fce7f3", "#fbcfe8"),  # rosa
+    ("#ede9fe", "#ddd6fe"),  # violeta
+    ("#ffedd5", "#fed7aa"),  # naranja
+]
+
+_COLOR_APERTURA    = "#f0fdf4"   # green-50
+_COLOR_CIERRE      = "#fefce8"   # yellow-50
+_COLOR_FIN_DOC     = "#f5f3ff"   # violet-50
+_COLOR_FIN_FIS     = "#fdf2f8"   # pink-50
+_COLOR_FIN_SIM     = "#f1f5f9"   # slate-100
+_COLOR_CORTE_N     = "#fff7ed"   # orange-50
+_COLOR_INICIO      = "#f8fafc"   # slate-50
+
+
+def _colores_tipo(tipos_clientes: list) -> dict:
+    """Devuelve {codigo: (bg_llegada, bg_camion)} para cada tipo."""
+    return {
+        t["codigo"]: _PALETA_TIPOS[i % len(_PALETA_TIPOS)]
+        for i, t in enumerate(tipos_clientes)
+    }
+
+
+def _bg_evento(evento: str, colores: dict) -> str:
+    if not evento:
+        return ""
+    if evento == "Inicio":
+        return _COLOR_INICIO
+    if evento.startswith("Apertura"):
+        return _COLOR_APERTURA
+    if evento.startswith("Cierre ventana"):
+        return _COLOR_CIERRE
+    if evento.startswith("Fin Doc"):
+        return _COLOR_FIN_DOC
+    if evento.startswith("Fin Revision Fisica"):
+        return _COLOR_FIN_FIS
+    if evento in ("Fin simulacion",):
+        return _COLOR_FIN_SIM
+    if evento == "Corte por limite de iteraciones":
+        return _COLOR_CORTE_N
+    for cod, (bg, _) in colores.items():
+        if evento == f"Llegada {cod}":
+            return bg
+    return ""
+
+
+def aplicar_estilos_vector(df, tipos_clientes: list):
+    """Colorea cada fila del vector de estado según el tipo de evento."""
+    colores = _colores_tipo(tipos_clientes)
+    evento_col = ("Control", "Evento")
+
+    def color_fila(row):
+        evento = str(row.get(evento_col, "") or "")
+        bg = _bg_evento(evento, colores)
+        estilo = f"background-color: {bg}; color: #1e293b" if bg else ""
+        return [estilo] * len(row)
+
+    return df.style.apply(color_fila, axis=1)
+
+
+def aplicar_estilos_activos(df, tipos_clientes: list):
+    """Colorea la tabla de camiones activos por tipo."""
+    colores = _colores_tipo(tipos_clientes)
+
+    def color_fila(row):
+        tipo = str(row.get("Tipo", "") or "")
+        bg = colores.get(tipo, (None, None))[1]
+        estilo = f"background-color: {bg}; color: #1e293b" if bg else ""
+        return [estilo] * len(row)
+
+    return df.style.apply(color_fila, axis=1)
+
+
+def renderizar_leyenda(tipos_clientes: list):
+    colores = _colores_tipo(tipos_clientes)
+    items = []
+
+    def chip(bg, texto):
+        return (
+            f'<span style="display:inline-block;padding:2px 10px;margin:2px 4px;'
+            f'border-radius:4px;background:{bg};color:#1e293b;font-size:0.82rem;">{texto}</span>'
+        )
+
+    for tipo in tipos_clientes:
+        cod = tipo["codigo"]
+        bg, _ = colores[cod]
+        items.append(chip(bg, f"Llegada {cod}"))
+
+    items.append(chip(_COLOR_FIN_DOC,  "Fin Documental"))
+    items.append(chip(_COLOR_FIN_FIS,  "Fin Revisión Física"))
+    items.append(chip(_COLOR_APERTURA, "Apertura"))
+    items.append(chip(_COLOR_CIERRE,   "Cierre ventana"))
+    items.append(chip(_COLOR_FIN_SIM,  "Fin simulación"))
+    items.append(chip(_COLOR_CORTE_N,  "Corte por N"))
+
+    st.markdown(
+        "<div style='margin-bottom:6px'><b>Leyenda:</b> " + " ".join(items) + "</div>",
+        unsafe_allow_html=True,
     )
 
 
@@ -621,9 +812,9 @@ div.stButton > button:focus {
 
 st.sidebar.header("Parametros de simulacion")
 
-X = st.sidebar.number_input("Tiempo total X (min)", min_value=1, value=720, step=1)
-N = st.sidebar.number_input("Iteraciones maximas N", min_value=1, value=1000, step=1)
-i_rows = st.sidebar.number_input("Filas a mostrar i", min_value=1, value=50, step=1)
+N = st.sidebar.number_input("Iteraciones maximas N", min_value=1, value=10000, step=1)
+mostrar_todas = st.sidebar.checkbox("Mostrar todas las filas", value=False)
+i_rows = None if mostrar_todas else st.sidebar.number_input("Filas a mostrar i", min_value=1, value=50, step=1)
 j_min = st.sidebar.number_input("Minuto inicio visualizacion j", min_value=0, value=0, step=1)
 seed_input = st.sidebar.text_input("Semilla opcional", value="")
 
@@ -680,14 +871,33 @@ fis_min = st.sidebar.number_input("Revision fisica minima", value=30.0, min_valu
 fis_max = st.sidebar.number_input("Revision fisica maxima", value=60.0, min_value=0.0)
 
 st.sidebar.subheader("Ventana operativa")
-ventana_fin = st.sidebar.number_input("Cierre de ventana operativa", value=720, min_value=1)
+cantidad_dias = st.sidebar.number_input("Cantidad de dias a simular", min_value=1, value=1, step=1)
+ventana_inicio = st.sidebar.number_input(
+    "Inicio ventana (min del día, 0-1440)",
+    min_value=0,
+    max_value=1439,
+    value=420,
+    step=1,
+)
+ventana_fin = st.sidebar.number_input(
+    "Fin ventana (min del día, 0-1440)",
+    min_value=1,
+    max_value=1440,
+    value=1140,
+    step=1,
+)
+
+# Mostrar horarios equivalentes
+if ventana_inicio < ventana_fin:
+    st.sidebar.caption(
+        f"Ventana: {min_a_hhmm(ventana_inicio)} – {min_a_hhmm(ventana_fin)} "
+        f"({int(ventana_fin - ventana_inicio)} min/día)"
+    )
 
 errores = []
-if X <= 0:
-    errores.append("X debe ser mayor a 0.")
 if N <= 0:
     errores.append("N debe ser mayor a 0.")
-if i_rows <= 0:
+if i_rows is not None and i_rows <= 0:
     errores.append("i debe ser mayor a 0.")
 if j_min < 0:
     errores.append("j debe ser mayor o igual a 0.")
@@ -695,8 +905,10 @@ if doc_max < doc_min:
     errores.append("La revision documental maxima debe ser mayor o igual a la minima.")
 if fis_max < fis_min:
     errores.append("La revision fisica maxima debe ser mayor o igual a la minima.")
-if ventana_fin <= 0:
-    errores.append("El cierre de ventana debe ser mayor a 0.")
+if ventana_inicio >= ventana_fin:
+    errores.append("El inicio de ventana debe ser menor al fin de ventana.")
+if ventana_fin > 1440:
+    errores.append("El fin de ventana no puede superar 1440 min (24 hs).")
 for tipo in tipos_clientes:
     if tipo["media"] <= 0:
         errores.append(f"La media de llegada de {tipo['codigo']} debe ser mayor a 0.")
@@ -715,8 +927,8 @@ if st.button("Simular", use_container_width=True) and not errores:
             cont_doc,
             acum_fosa,
             max_cam,
+            acum_tiempo_activo,
         ) = simular(
-            X=float(X),
             N=int(N),
             seed=seed,
             tipos_clientes=tipos_clientes,
@@ -725,12 +937,24 @@ if st.button("Simular", use_container_width=True) and not errores:
             prob_fisica=float(prob_fisica),
             fis_min=float(fis_min),
             fis_max=float(fis_max),
+            ventana_inicio=float(ventana_inicio),
             ventana_fin=float(ventana_fin),
+            cantidad_dias=int(cantidad_dias),
             puestos_documentales=int(puestos_documentales),
             cantidad_fosas=int(cantidad_fosas),
         )
 
     df_full = build_multiindex_df(rows, tipos_clientes, int(puestos_documentales), int(cantidad_fosas))
+
+    ultimo_evento = rows[-1]["ctrl_evento"] if rows else ""
+    corte_por_n = ultimo_evento == "Corte por limite de iteraciones"
+
+    if corte_por_n:
+        tiempo_corte = float(rows[-1]["ctrl_reloj"]) if rows else 0.0
+        st.warning(
+            f"La simulación se cortó en el minuto {tiempo_corte:.4f} por límite de iteraciones N={N}. "
+            "Las métricas son parciales y el denominador se calcula hasta ese instante."
+        )
 
     st.subheader("Metricas finales")
 
@@ -747,14 +971,7 @@ if st.button("Simular", use_container_width=True) and not errores:
         )
         col_idx += 1
 
-    tiempo_simulado = float(rows[-1]["ctrl_reloj"]) if rows else 0.0
-    util_fosa = (acum_fosa / tiempo_simulado * 100) if tiempo_simulado > 0 else 0.0
-
-    if tiempo_simulado < float(X):
-        st.warning(
-            f"La simulación se cortó en el minuto {tiempo_simulado:.4f} por límite de iteraciones N. "
-            "Las métricas son parciales y la utilización se calcula hasta ese instante de corte."
-        )
+    util_fosa = (acum_fosa / acum_tiempo_activo * 100) if acum_tiempo_activo > 0 else 0.0
 
     metric_cols[col_idx % len(metric_cols)].metric("Utilizacion fosa", f"{util_fosa:.2f} %")
     col_idx += 1
@@ -770,14 +987,18 @@ if st.button("Simular", use_container_width=True) and not errores:
                 f"{cont_doc[tid]} = {esperas[tid]:.4f} min"
             )
         lineas.append(
-            f"- Utilizacion fosa = ACU tiempo ocupacion fosa / Tiempo total simulado x 100 = "
-            f"{acum_fosa:.4f} / {tiempo_simulado:.4f} x 100 = {util_fosa:.4f} %"
+            f"- Utilizacion fosa = ACU tiempo ocupacion fosa / ACU tiempo activo x 100 = "
+            f"{acum_fosa:.4f} / {acum_tiempo_activo:.4f} x 100 = {util_fosa:.4f} %"
+        )
+        lineas.append(
+            f"  (ACU tiempo activo = suma de ventanas operativas + overtime de cada día)"
         )
         lineas.append(f"- Maximo camiones simultaneos = max(Cont Camiones en sistema) = {max_cam}")
         st.markdown("\n".join(lineas))
 
     reloj_col = ("Control", "Reloj")
-    df_filtrado = df_full[df_full[reloj_col] >= float(j_min)].head(int(i_rows))
+    df_desde_j = df_full[df_full[reloj_col] >= float(j_min)]
+    df_filtrado = df_desde_j if mostrar_todas else df_desde_j.head(int(i_rows))
     df_ultima = df_full.tail(1)
 
     if not df_ultima.empty and df_ultima.index[0] not in df_filtrado.index:
@@ -786,38 +1007,12 @@ if st.button("Simular", use_container_width=True) and not errores:
     df_filtrado = df_filtrado.loc[~df_filtrado.index.duplicated(keep="first")]
 
     st.subheader("Vector de estado")
-    st.caption("Se muestran las primeras i filas desde j y siempre se agrega la ultima fila de simulacion si no estaba incluida.")
-    st.dataframe(df_filtrado, use_container_width=True, height=650)
+    if mostrar_todas:
+        st.caption("Se muestran todas las filas desde j. La última fila siempre se incluye.")
+    else:
+        st.caption("Se muestran las primeras i filas desde j y siempre se agrega la ultima fila de simulacion si no estaba incluida.")
+    renderizar_leyenda(tipos_clientes)
+    st.dataframe(aplicar_estilos_vector(df_filtrado, tipos_clientes), use_container_width=True, height=650)
 
     st.subheader("Ultima fila de simulacion")
-    st.dataframe(df_ultima, use_container_width=True, height=170)
-
-    st.subheader("Camiones activos")
-    activos = [camion for camion in camiones.values() if camion.estado != "Destruido"]
-
-    if activos:
-        df_activos = pd.DataFrame([
-            {
-                "Camion": camion.id,
-                "Tipo": camion.tipo,
-                "Hora Llegada": fmt(camion.h_llegada),
-                "Hora Inicio Atención Documental": fmt(camion.h_inicio_doc),
-                "Estado": camion.estado,
-            }
-            for camion in sorted(activos, key=lambda x: x.id)
-        ])
-        st.dataframe(df_activos, use_container_width=True, height=300)
-    else:
-        st.info("No hay camiones activos al finalizar la simulacion.")
-
-    st.subheader("Descargar vector completo")
-    df_csv = df_full.copy()
-    df_csv.columns = [f"{g} | {c}" for g, c in df_csv.columns]
-    csv_bytes = df_csv.to_csv(index=False).encode("utf-8")
-
-    st.download_button(
-        label="Descargar CSV",
-        data=csv_bytes,
-        file_name="vector_aduana.csv",
-        mime="text/csv",
-    )
+    st.dataframe(aplicar_estilos_vector(df_ultima, tipos_clientes), use_container_width=True, height=170)
