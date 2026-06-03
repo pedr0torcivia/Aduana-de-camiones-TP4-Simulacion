@@ -4,7 +4,6 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 import pandas as pd
-import numpy as np
 
 # Permitir Styler en tablas grandes
 pd.set_option("styler.render.max_elements", 2_000_000)
@@ -351,7 +350,7 @@ def simular(
             row[f"aux_h_fin_fosa_{fosa.id}"] = fmt(fin_fosa_liberada_dict.get(fosa.id))
 
         if mostrar_temporales:
-            for cid, camion in sorted(camiones.items()):
+            for cid, camion in camiones.items():
                 if camion.estado != "Destruido":
                     pref = f"camion_{cid}_"
                     row[pref + "tipo"] = camion.tipo
@@ -668,12 +667,12 @@ _PALETA_TIPOS = [
     ("#ffedd5", "#fed7aa"),  # naranja
 ]
 
-_COLOR_APERTURA    = "#f0fdf4"   # green-50
-_COLOR_CIERRE      = "#fefce8"   # yellow-50
+_COLOR_APERTURA    = "#bbf7d0"   # green-200  — Inicio de día
+_COLOR_CIERRE      = "#fcd34d"   # amber-300  — Cierre de ventana
 _COLOR_FIN_DOC     = "#f5f3ff"   # violet-50
 _COLOR_FIN_FIS     = "#fdf2f8"   # pink-50
-_COLOR_FIN_SIM     = "#f1f5f9"   # slate-100
-_COLOR_CORTE_N     = "#fff7ed"   # orange-50
+_COLOR_FIN_SIM     = "#6ee7b7"   # emerald-300 — Fin simulación
+_COLOR_CORTE_N     = "#fdba74"   # orange-300  — Corte por N
 _COLOR_INICIO      = "#f8fafc"   # slate-50
 
 
@@ -717,23 +716,63 @@ def aplicar_estilos_vector(df, tipos_clientes: list):
         bg = _bg_evento(str(val or ""), colores)
         return f"background-color: {bg}; color: #1e293b" if bg else ""
 
-    # map() en pandas >= 2.1, applymap() en versiones anteriores
     styler = df.style
+    if evento_col not in df.columns:
+        return styler
+    # map() en pandas >= 2.1, applymap() en versiones anteriores
     try:
         return styler.map(fmt, subset=[evento_col])
-    except AttributeError:
+    except (AttributeError, TypeError, KeyError):
+        pass
+    try:
         return styler.applymap(fmt, subset=[evento_col])
+    except Exception:
+        return styler
+
+
+_MAX_CELDAS_STYLER = 300_000
+
+
+def _mostrar_df_estilado(styler, height: int = None):
+    """Renderiza un Styler. Si el DataFrame es muy grande, muestra sin estilos."""
+    kwargs = {"use_container_width": True}
+    if height:
+        kwargs["height"] = height
+
+    df = styler.data
+    total_celdas = df.shape[0] * df.shape[1]
+
+    # Para tablas grandes el Styler es lento o falla: mostrar directamente
+    if total_celdas > _MAX_CELDAS_STYLER:
+        st.caption(f"Tabla grande ({df.shape[0]} filas × {df.shape[1]} col). Estilos de color desactivados.")
+        st.dataframe(df, **kwargs)
+        return
+
+    try:
+        st.dataframe(styler, **kwargs)
+        return
+    except Exception:
+        pass
+    try:
+        html = styler.to_html()
+        scroll = f"height:{height}px;overflow:auto;" if height else "overflow:auto;"
+        st.markdown(f'<div style="{scroll}">{html}</div>', unsafe_allow_html=True)
+        return
+    except Exception:
+        pass
+    st.dataframe(df, **kwargs)
 
 
 def aplicar_estilos_activos(df, tipos_clientes: list):
     """Colorea la tabla de camiones activos por tipo."""
     colores = _colores_tipo(tipos_clientes)
 
-    bgs = df["Tipo"].fillna("").astype(str).map(lambda t: colores.get(t, (None, None))[1] or "")
-    estilos_fila = bgs.map(lambda bg: f"background-color: {bg}; color: #1e293b" if bg else "")
-    estilos = _estilos_df(df, estilos_fila)
+    def color_fila(row):
+        bg = colores.get(str(row.get("Tipo") or ""), (None, None))[1]
+        estilo = f"background-color: {bg}; color: #1e293b" if bg else ""
+        return [estilo] * len(row)
 
-    return df.style.apply(lambda _: estilos, axis=None)
+    return df.style.apply(color_fila, axis=1)
 
 
 def renderizar_leyenda(tipos_clientes: list):
@@ -946,8 +985,6 @@ if st.button("Simular", use_container_width=True) and not errores:
             cantidad_fosas=int(cantidad_fosas),
         )
 
-    df_full = build_multiindex_df(rows, tipos_clientes, int(puestos_documentales), int(cantidad_fosas))
-
     ultimo_evento = rows[-1]["ctrl_evento"] if rows else ""
     corte_por_n = ultimo_evento == "Corte por limite de iteraciones"
 
@@ -998,15 +1035,20 @@ if st.button("Simular", use_container_width=True) and not errores:
         lineas.append(f"- Maximo camiones simultaneos = max(Cont Camiones en sistema) = {max_cam}")
         st.markdown("\n".join(lineas))
 
-    reloj_col = ("Control", "Reloj")
-    df_desde_j = df_full[df_full[reloj_col] >= float(j_min)]
-    df_filtrado = df_desde_j if mostrar_todas else df_desde_j.head(int(i_rows))
-    df_ultima = df_full.tail(1)
+    # Filtrar rows antes de construir el DataFrame para no materializar toda la tabla
+    j = float(j_min)
+    rows_desde_j = [r for r in rows if (r["ctrl_reloj"] or 0) >= j]
+    rows_filtradas = rows_desde_j if mostrar_todas else rows_desde_j[:int(i_rows)]
 
-    if not df_ultima.empty and df_ultima.index[0] not in df_filtrado.index:
-        df_filtrado = pd.concat([df_filtrado, df_ultima])
+    # Garantizar que la última fila siempre esté incluida
+    if rows and rows[-1] not in rows_filtradas:
+        rows_filtradas = rows_filtradas + [rows[-1]]
 
-    df_filtrado = df_filtrado.loc[~df_filtrado.index.duplicated(keep="first")]
+    puestos = int(puestos_documentales)
+    fosas_n = int(cantidad_fosas)
+
+    df_filtrado = build_multiindex_df(rows_filtradas, tipos_clientes, puestos, fosas_n)
+    df_ultima = build_multiindex_df([rows[-1]], tipos_clientes, puestos, fosas_n) if rows else df_filtrado.tail(1)
 
     st.subheader("Vector de estado")
     if mostrar_todas:
@@ -1014,7 +1056,60 @@ if st.button("Simular", use_container_width=True) and not errores:
     else:
         st.caption("Se muestran las primeras i filas desde j y siempre se agrega la ultima fila de simulacion si no estaba incluida.")
     renderizar_leyenda(tipos_clientes)
-    st.dataframe(aplicar_estilos_vector(df_filtrado, tipos_clientes), use_container_width=True, height=650)
+    _mostrar_df_estilado(aplicar_estilos_vector(df_filtrado, tipos_clientes), height=650)
 
     st.subheader("Ultima fila de simulacion")
-    st.dataframe(aplicar_estilos_vector(df_ultima, tipos_clientes), use_container_width=True, height=170)
+    _mostrar_df_estilado(aplicar_estilos_vector(df_ultima, tipos_clientes), height=170)
+
+    # ---- Gráficos de análisis ----
+    st.subheader("Gráficos de análisis")
+
+    if rows:
+        relojes = [r["ctrl_reloj"] for r in rows]
+
+        st.markdown("#### Camiones en sistema")
+        st.markdown(
+            "Muestra cuántos camiones hay simultáneamente dentro del sistema en cada momento. "
+            "Un valor alto y sostenido indica congestión; el pico coincide con el máximo de camiones simultáneos."
+        )
+        if "aux_cam_sistema" in rows[0]:
+            cam_vals = [r["aux_cam_sistema"] for r in rows]
+            df_cam = pd.DataFrame({"Camiones en sistema": cam_vals}, index=relojes)
+            df_cam.index.name = "Reloj (min)"
+            st.line_chart(df_cam)
+        else:
+            st.info("Columna 'Cont Camiones en sistema' no disponible.")
+
+        st.markdown("#### Colas de control documental")
+        st.markdown(
+            "Evolución de la cantidad de camiones esperando en cada cola de revisión documental. "
+            "Permite ver si la prioridad asignada a CCP logra mantener su cola más baja que la de CCG, "
+            "y si los servidores documentales son suficientes para absorber la demanda."
+        )
+        cola_doc_keys = {tipo["codigo"]: f"cola_doc_{tipo['id']}" for tipo in tipos_clientes}
+        if any(k in rows[0] for k in cola_doc_keys.values()):
+            data_colas = {}
+            for codigo, key in cola_doc_keys.items():
+                if key in rows[0]:
+                    data_colas[f"Cola {codigo}"] = [r.get(key, 0) for r in rows]
+            df_colas = pd.DataFrame(data_colas, index=relojes)
+            df_colas.index.name = "Reloj (min)"
+            st.line_chart(df_colas)
+        else:
+            st.info("Columnas de colas documentales no disponibles.")
+
+        st.markdown("#### Cola de revisión física (fosa)")
+        st.markdown(
+            "Cantidad de camiones esperando para entrar a la fosa de revisión física. "
+            "Si esta cola crece de forma sostenida, la fosa es el cuello de botella del sistema "
+            "y podría justificar incorporar una segunda fosa o ajustar la probabilidad de inspección."
+        )
+        if "fos_cola" in rows[0]:
+            fosa_vals = [r["fos_cola"] for r in rows]
+            df_fosa = pd.DataFrame({"Cola fosa": fosa_vals}, index=relojes)
+            df_fosa.index.name = "Reloj (min)"
+            st.line_chart(df_fosa)
+        else:
+            st.info("Columna 'Cola fosa' no disponible.")
+    else:
+        st.info("No hay datos para graficar.")
