@@ -20,6 +20,35 @@ Los camiones ingresan según distribuciones de probabilidad, esperan para ser at
 
 ---
 
+### Enunciado: Aduana de Camiones
+
+La aduana fronteriza procesa el ingreso de camiones en una ventana operativa de **07:00 a 19:00 horas**. Al cierre, los camiones que ya están en la fila de control documental son procesados, pero se rechaza cualquier llegada posterior.
+
+Arriban dos tipos de cargas:
+
+- **Carga General (CCG):** frecuencia exponencial negativa con media de 15 minutos.
+- **Carga Perecedera (CCP):** frecuencia exponencial negativa con media de 40 minutos.
+
+El control consta de dos etapas:
+
+**Control Documental**
+- Hay tres puestos de atención.
+- Los camiones con carga perecedera tienen prioridad absoluta en la fila.
+- El tiempo de revisión es uniforme entre 10 y 15 minutos.
+
+**Revisión Física**
+- Al finalizar el control documental, el 15% de todos los camiones es derivado a una fosa de inspección profunda (un solo servidor).
+- Demora entre 30 y 60 minutos con distribución uniforme.
+- En esta instancia no existen prioridades por tipo de carga.
+
+**Objetivos de la simulación:**
+
+- Tiempo de espera promedio diferenciado para camiones de carga general y perecedera en el control documental.
+- Porcentaje de utilización del puesto de revisión física.
+- Cantidad máxima de camiones que se acumularon simultáneamente en el recinto aduanero.
+
+---
+
 ## Versión corregida
 
 La versión corregida mejora la lógica temporal de la simulación. En lugar de finalizar simplemente al llegar a un tiempo fijo X, el programa trabaja con días de operación, ventanas horarias y cierre real del sistema.
@@ -236,35 +265,6 @@ Actualmente se recomienda utilizar la versión corregida, ya que representa mejo
 ## Contexto académico
 
 Este proyecto fue desarrollado como parte de un trabajo práctico de la materia **Simulación**, con el objetivo de aplicar conceptos de simulación por eventos discretos, variables aleatorias, colas, servidores, acumuladores y análisis de métricas de desempeño.
-
----
-
-### Enunciado: Aduana de Camiones
-
-La aduana fronteriza procesa el ingreso de camiones en una ventana operativa de **07:00 a 19:00 horas**. Al cierre, los camiones que ya están en la fila de control documental son procesados, pero se rechaza cualquier llegada posterior.
-
-Arriban dos tipos de cargas:
-
-- **Carga General (CCG):** frecuencia exponencial negativa con media de 15 minutos.
-- **Carga Perecedera (CCP):** frecuencia exponencial negativa con media de 40 minutos.
-
-El control consta de dos etapas:
-
-**Control Documental**
-- Hay tres puestos de atención.
-- Los camiones con carga perecedera tienen prioridad absoluta en la fila.
-- El tiempo de revisión es uniforme entre 10 y 15 minutos.
-
-**Revisión Física**
-- Al finalizar el control documental, el 15% de todos los camiones es derivado a una fosa de inspección profunda (un solo servidor).
-- Demora entre 30 y 60 minutos con distribución uniforme.
-- En esta instancia no existen prioridades por tipo de carga.
-
-**Objetivos de la simulación:**
-
-- Tiempo de espera promedio diferenciado para camiones de carga general y perecedera en el control documental.
-- Porcentaje de utilización del puesto de revisión física.
-- Cantidad máxima de camiones que se acumularon simultáneamente en el recinto aduanero.
 
 ---
 
