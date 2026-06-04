@@ -1023,7 +1023,8 @@ if st.session_state.sim_ran:
     esperas = {}
     for tipo in tipos_clientes:
         tid = tipo["id"]
-        espera_prom = acum_espera[tid] / cont_doc[tid] if cont_doc[tid] > 0 else 0.0
+        _cnt = cont_doc.get(tid, 0)
+        espera_prom = acum_espera.get(tid, 0.0) / _cnt if _cnt > 0 else 0.0
         esperas[tid] = espera_prom
         metric_cols[col_idx % len(metric_cols)].metric(
             f"Espera prom. {tipo['codigo']}",
@@ -1043,8 +1044,8 @@ if st.session_state.sim_ran:
             tid = tipo["id"]
             lineas.append(
                 f"- Espera promedio {tipo['codigo']} = ACU de espera {tipo['codigo']} / "
-                f"Cont {tipo['codigo']} cola documental = {acum_espera[tid]:.4f} / "
-                f"{cont_doc[tid]} = {esperas[tid]:.4f} min"
+                f"Cont {tipo['codigo']} cola documental = {acum_espera.get(tid, 0.0):.4f} / "
+                f"{cont_doc.get(tid, 0)} = {esperas[tid]:.4f} min"
             )
         lineas.append(
             f"- Utilizacion fosa = ACU tiempo ocupacion fosa / ACU tiempo activo x 100 = "
